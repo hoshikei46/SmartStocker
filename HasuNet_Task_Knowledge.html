@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta name="robots" content="noindex, nofollow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HasuNet_Task＆Knowledge</title>
@@ -28,10 +27,8 @@
             body { background-color: white !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .print-hidden { display: none !important; }
             .break-inside-avoid { page-break-inside: avoid; }
-            /* ナレッジ印刷用 (12pt) */
             .print-title { font-size: 12pt !important; font-weight: bold; line-height: 1.4 !important; }
             .print-text  { font-size: 12pt !important; line-height: 1.4 !important; }
-            /* タスク印刷専用 (11pt・行間タイト) */
             .task-print-root * { font-size: 11pt !important; line-height: 1.3 !important; }
             .task-print-title  { font-size: 11pt !important; font-weight: bold !important; }
         }
@@ -58,7 +55,7 @@
         const ALL_SLOTS = baseMonths.flatMap(m => subPeriods.map(p => `${m}${p}`));
         
         const defaultTaskDomains = ['給与・手当', '財務・備品', '服務・人事', '就学援助', 'システム・調査', 'その他'];
-        const TASK_TAGS = ['提出必須', '校長決裁', 'システム入力', '印刷・配付', '確認作業', '重要'];
+        const defaultTaskTags = ['提出必須', '校長決裁', 'システム入力', '印刷・配付', '確認作業', '重要'];
         const RECURRING_OPTIONS = [
             { value: 'none', label: '📌 単発タスク' }, { value: 'monthly', label: '🔄 毎月' },
             { value: 'term_start', label: '🏫 学期初め (4, 8/9, 1月)' }, { value: 'term_end', label: '🏁 学期末 (7, 12, 3月)' },
@@ -82,7 +79,6 @@
             return vis==='public'?`${b}/knowledge`:vis==='school'?`${b}/schools/${school}/knowledge`:`${b}/schools/${school}/users/${user}/knowledge`;
         };
 
-        // ★ AIが返すフィールドを型安全な文字列に変換するヘルパー
         const toSafeString = (val, fallback = '') => {
             if (val === null || val === undefined) return fallback;
             if (typeof val === 'string') return val;
@@ -91,14 +87,106 @@
             return String(val);
         };
 
-        function SettingModal({ title, items, newItem, setNewItem, onAdd, onRemove, onClose }) {
+        const updateRelatedData = async (cityId, schoolId, userId, targetCollectionType, fieldType, oldVal, newVal) => {
+            const visibilities = ['public', 'school', 'private'];
+            const promises = [];
+
+            for (const vis of visibilities) {
+                const path = getColPath(cityId, schoolId, userId, targetCollectionType, vis);
+                const snapshot = await db.collection(path).get();
+                
+                snapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    let needsUpdate = false;
+                    let updatePayload = {};
+
+                    if (fieldType === 'domain' && data.domain === oldVal) {
+                        updatePayload.domain = newVal; needsUpdate = true;
+                    } else if (fieldType === 'task_tags' && Array.isArray(data.tags) && data.tags.includes(oldVal)) {
+                        updatePayload.tags = data.tags.map(t => t === oldVal ? newVal : t); needsUpdate = true;
+                    } else if (fieldType === 'category' && data.category === oldVal) {
+                        updatePayload.category = newVal; needsUpdate = true;
+                    } else if (fieldType === 'timing' && data.timing === oldVal) {
+                        updatePayload.timing = newVal; needsUpdate = true;
+                    } else if (fieldType === 'tags' && Array.isArray(data.selectedTags) && data.selectedTags.includes(oldVal)) {
+                        updatePayload.selectedTags = data.selectedTags.map(t => t === oldVal ? newVal : t); needsUpdate = true;
+                    } else if (fieldType === 'stakeholders' && data.stakeholders === oldVal) {
+                        updatePayload.stakeholders = newVal; needsUpdate = true;
+                    } else if (fieldType === 'sources') {
+                        if (Array.isArray(data.selectedSources) && data.selectedSources.includes(oldVal)) {
+                            updatePayload.selectedSources = data.selectedSources.map(s => s === oldVal ? newVal : s);
+                            needsUpdate = true;
+                        }
+                        if (data.source === oldVal) {
+                            const currentSources = needsUpdate ? updatePayload.selectedSources : (Array.isArray(data.selectedSources) ? data.selectedSources : []);
+                            if (!currentSources.includes(newVal)) {
+                                updatePayload.selectedSources = [...currentSources, newVal];
+                            }
+                            updatePayload.source = firebase.firestore.FieldValue.delete();
+                            needsUpdate = true;
+                        }
+                    }
+
+                    if (needsUpdate) {
+                        promises.push(db.collection(path).doc(doc.id).update(updatePayload));
+                    }
+                });
+            }
+
+            if (promises.length > 0) {
+                await Promise.all(promises);
+            }
+        };
+
+        function SettingModal({ title, items, newItem, setNewItem, onAdd, onRemove, onEdit, onReorder, onClose }) {
+            const [editTarget, setEditTarget] = useState(null);
+            const [editValue, setEditValue] = useState('');
+
+            const handleSaveEdit = (oldVal) => {
+                if(editValue.trim() && editValue !== oldVal) {
+                    onEdit(oldVal, editValue.trim());
+                }
+                setEditTarget(null);
+            };
+
+            const moveItem = (index, direction) => {
+                if (direction === -1 && index > 0) {
+                    onReorder(index, index - 1);
+                } else if (direction === 1 && index < items.length - 1) {
+                    onReorder(index, index + 1);
+                }
+            };
+
             return (
                 <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-[60] print-hidden">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 border-t-8 border-emerald-500">
                         <h3 className="font-black text-lg mb-4">{title}</h3>
-                        <div className="flex gap-2 mb-4"><input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>e.key==='Enter'&&onAdd()} className="flex-1 p-2 border-2 border-slate-200 rounded-lg outline-none" placeholder="追加..." /><button onClick={onAdd} className="bg-emerald-600 text-white px-4 rounded-lg font-bold">追加</button></div>
-                        <ul className="space-y-2 max-h-60 overflow-y-auto mb-6">
-                            {items.map(i => <li key={i} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-200"><span className="font-bold">{i}</span><button onClick={()=>onRemove(i)} className="text-red-500 font-bold text-sm px-2">削除</button></li>)}
+                        <div className="flex gap-2 mb-4">
+                            <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.nativeEvent.isComposing)onAdd();}} className="flex-1 p-2 border-2 border-slate-200 rounded-lg outline-none" placeholder="追加..." />
+                            <button onClick={onAdd} className="bg-emerald-600 text-white px-4 rounded-lg font-bold">追加</button>
+                        </div>
+                        <ul className="space-y-2 max-h-60 overflow-y-auto mb-6 pr-1">
+                            {items.map((i, index) => (
+                                <li key={i} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                                    {editTarget === i ? (
+                                        <div className="flex flex-1 gap-2">
+                                            <input value={editValue} onChange={e=>setEditValue(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.nativeEvent.isComposing)handleSaveEdit(i);}} className="flex-1 p-1 border border-emerald-400 rounded outline-none font-bold text-sm" autoFocus />
+                                            <button onClick={()=>handleSaveEdit(i)} className="bg-blue-500 text-white px-3 py-1 rounded font-bold text-xs">保存</button>
+                                            <button onClick={()=>setEditTarget(null)} className="bg-slate-300 text-slate-700 px-3 py-1 rounded font-bold text-xs">取消</button>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <span className="font-bold flex-1 break-all mr-2">{i}</span>
+                                            <div className="flex gap-1 shrink-0">
+                                                <button onClick={() => moveItem(index, -1)} disabled={index === 0} className="bg-slate-200 hover:bg-slate-300 text-slate-600 font-black px-2 py-1 rounded disabled:opacity-30 disabled:hover:bg-slate-200">↑</button>
+                                                <button onClick={() => moveItem(index, 1)} disabled={index === items.length - 1} className="bg-slate-200 hover:bg-slate-300 text-slate-600 font-black px-2 py-1 rounded disabled:opacity-30 disabled:hover:bg-slate-200">↓</button>
+                                                <button onClick={()=>{setEditTarget(i); setEditValue(i);}} className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2 py-1 rounded ml-1">編集</button>
+                                                <button onClick={()=>onRemove(i)} className="bg-red-100 hover:bg-red-200 text-red-600 font-bold text-xs px-2 py-1 rounded">削除</button>
+                                            </div>
+                                        </>
+                                    )}
+                                </li>
+                            ))}
                         </ul>
                         <button onClick={onClose} className="w-full p-3 bg-slate-200 hover:bg-slate-300 font-bold rounded-xl">閉じる</button>
                     </div>
@@ -135,21 +223,6 @@
                             <input type="password" value={key} onChange={e=>setKey(e.target.value)} className="w-full p-3 border-2 border-slate-200 rounded-lg font-bold outline-none mb-4" placeholder="AIzaSy..." />
                         )}
                         <div className="flex gap-3"><button onClick={onClose} className="flex-1 p-3 bg-slate-200 rounded-xl font-bold text-slate-700">閉じる</button><button onClick={save} disabled={loading} className="flex-1 p-3 bg-blue-600 rounded-xl font-bold text-white shadow-md disabled:opacity-50">保存して共有</button></div>
-                    </div>
-                </div>
-            );
-        }
-
-        function AISummaryModal({ summaryConfig, onClose }) {
-            if (!summaryConfig.isOpen) return null;
-            return (
-                <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-[70] print-hidden">
-                    <div className="bg-white rounded-3xl shadow-xl w-full max-w-lg p-6 border-t-8 border-purple-500">
-                        <h3 className="font-black text-xl mb-4 flex items-center gap-2">🤖 AI要約: {summaryConfig.title}</h3>
-                        <div className="p-5 bg-purple-50 rounded-xl border border-purple-200 text-purple-900 whitespace-pre-wrap min-h-[100px] font-medium leading-relaxed shadow-inner">
-                            {summaryConfig.loading ? '⏳ AIがマニュアルを読み込んで解説を生成しています...' : summaryConfig.text}
-                        </div>
-                        <div className="mt-6 flex justify-end"><button onClick={onClose} className="px-6 py-2.5 bg-slate-200 hover:bg-slate-300 font-bold rounded-xl text-slate-700">閉じる</button></div>
                     </div>
                 </div>
             );
@@ -254,11 +327,9 @@
             );
         }
 
-        // ★ ナレッジ一括PDF印刷用コンポーネント
         function KnowledgeAllPrintView({ items, cityId, schoolId, exportDate }) {
             return (
                 <div style={{ fontFamily: 'sans-serif', fontSize: '10.5pt', color: '#000', background: '#fff', padding: '0' }}>
-                    {/* 表紙 */}
                     <div style={{ textAlign: 'center', paddingTop: '60mm', paddingBottom: '60mm', borderBottom: '3px solid #000', marginBottom: '0', pageBreakAfter: 'always' }}>
                         <div style={{ fontSize: '9pt', color: '#666', marginBottom: '8mm' }}>HasuNet_Task＆Knowledge</div>
                         <div style={{ fontSize: '22pt', fontWeight: 'bold', marginBottom: '6mm' }}>📚 ナレッジベース 一覧</div>
@@ -267,29 +338,24 @@
                         <div style={{ fontSize: '9pt', color: '#888' }}>全 {items.length} 件</div>
                     </div>
 
-                    {/* 各ナレッジ */}
                     {items.map((item, i) => {
                         const vis = VIS_CONF[item.visibility || 'public'];
                         const safeTags = Array.isArray(item.selectedTags) ? item.selectedTags : [];
                         const safeContent = toSafeString(item.content, '（本文なし）');
                         return (
                             <div key={item.id} style={{ pageBreakInside: 'avoid', borderBottom: '1px solid #ccc', padding: '7mm 0', marginBottom: '0' }}>
-                                {/* ヘッダー行 */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3mm', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '8pt', fontWeight: 'bold', background: item.visibility === 'public' ? '#d1fae5' : item.visibility === 'school' ? '#fef3c7' : '#e2e8f0', color: item.visibility === 'public' ? '#065f46' : item.visibility === 'school' ? '#92400e' : '#475569', borderRadius: '3px', padding: '1px 5px' }}>{vis.label}</span>
                                     {item.category && <span style={{ fontSize: '8pt', background: '#f1f5f9', borderRadius: '3px', padding: '1px 5px', fontWeight: 'bold' }}>{item.category}</span>}
                                     {item.timing  && <span style={{ fontSize: '8pt', background: '#f1f5f9', borderRadius: '3px', padding: '1px 5px', fontWeight: 'bold' }}>📅 {item.timing}</span>}
                                     {safeTags.map(tg => <span key={tg} style={{ fontSize: '8pt', background: '#e2e8f0', borderRadius: '3px', padding: '1px 5px', fontWeight: 'bold' }}>#{tg}</span>)}
                                 </div>
-                                {/* タイトル */}
                                 <div style={{ fontSize: '12pt', fontWeight: 'bold', marginBottom: '3mm', lineHeight: '1.3' }}>
                                     {i + 1}. {item.title}
                                 </div>
-                                {/* 本文 */}
                                 <div style={{ fontSize: '10pt', lineHeight: '1.5', whiteSpace: 'pre-wrap', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '4px', padding: '3mm 4mm', marginBottom: '3mm' }}>
                                     {safeContent}
                                 </div>
-                                {/* フッター情報 */}
                                 {(item.stakeholders || item.fileLocation) && (
                                     <div style={{ display: 'flex', gap: '8mm', flexWrap: 'wrap' }}>
                                         {item.stakeholders && <div style={{ fontSize: '8.5pt', color: '#555' }}>📞 <b>関係先:</b> {toSafeString(item.stakeholders)}</div>}
@@ -299,8 +365,6 @@
                             </div>
                         );
                     })}
-
-                    {/* フッター */}
                     <div style={{ marginTop: '10mm', textAlign: 'center', fontSize: '8pt', color: '#aaa', borderTop: '1px solid #ddd', paddingTop: '4mm' }}>
                         HasuNet_Task＆Knowledge — {cityId} / {schoolId} — {exportDate} 出力
                     </div>
@@ -308,7 +372,6 @@
             );
         }
 
-        // パスワードをSHA-256でハッシュ化するヘルパー
         const hashPassword = async (password) => {
             const msgBuffer = new TextEncoder().encode(password);
             const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -316,28 +379,51 @@
             return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         };
 
-        // ==========================================
-        // ★ 管理者モーダル
-        // ==========================================
+        function AdminAiLimitSection({ cityId }) {
+            const [limitInput, setLimitInput] = useState(150);
+            const [limitSaved, setLimitSaved] = useState(false);
+            useEffect(() => {
+                db.collection(`cities/${cityId}/settings`).doc('ai_usage').get().then(doc => {
+                    if (doc.exists && doc.data().aiDailyLimit != null) setLimitInput(doc.data().aiDailyLimit);
+                });
+            }, [cityId]);
+            const saveLimit = async () => {
+                const val = parseInt(limitInput, 10);
+                if (isNaN(val) || val < 1) { alert('1以上の数値を入力してください'); return; }
+                await db.collection(`cities/${cityId}/settings`).doc('ai_usage').set({ aiDailyLimit: val }, { merge: true });
+                setLimitSaved(true); setTimeout(() => setLimitSaved(false), 2500);
+            };
+            return (
+                <div className="mb-4 bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                    <p className="text-sm font-black text-blue-800 mb-2">🤖 AI利用回数の上限設定（1日あたり・市町村全体）</p>
+                    <div className="flex gap-2 items-center">
+                        <input type="number" min="1" max="9999" value={limitInput} onChange={e=>setLimitInput(e.target.value)} className="w-28 p-2 border-2 rounded-xl font-black text-center text-lg outline-none focus:border-blue-400" />
+                        <span className="font-bold text-slate-600 text-sm">回 / 日</span>
+                        <button onClick={saveLimit} className="ml-auto bg-blue-600 text-white font-black px-4 py-2 rounded-xl text-sm hover:bg-blue-700">保存</button>
+                    </div>
+                    {limitSaved && <p className="text-xs text-emerald-600 font-black mt-2">✅ 保存しました</p>}
+                    <p className="text-xs text-blue-600 font-bold mt-2">※ PDFから自動生成・AI文章整理のすべてでカウントされます</p>
+                </div>
+            );
+        }
+
         function AdminModal({ cityId, onClose }) {
-            const [step, setStep] = useState('login'); // 'login' | 'menu'
+            const [step, setStep] = useState('login');
             const [adminPw, setAdminPw] = useState('');
             const [adminPwConfirm, setAdminPwConfirm] = useState('');
             const [error, setError] = useState('');
             const [loading, setLoading] = useState(false);
             const [isFirstSetup, setIsFirstSetup] = useState(false);
-            const [users, setUsers] = useState([]); // { schoolId, userId, path }
-            const [resetTarget, setResetTarget] = useState(null); // { schoolId, userId }
+            const [users, setUsers] = useState([]);
+            const [resetTarget, setResetTarget] = useState(null);
             const [resetDone, setResetDone] = useState(false);
 
-            // 管理者パスワード登録済みか確認
             useEffect(() => {
                 db.collection(`cities/${cityId}/settings`).doc('admin_auth').get().then(doc => {
                     if (!doc.exists || !doc.data().passwordHash) setIsFirstSetup(true);
                 });
             }, []);
 
-            // 管理者ログイン or 初回設定
             const handleAdminLogin = async (e) => {
                 e.preventDefault();
                 if (isFirstSetup) {
@@ -363,26 +449,19 @@
                 finally { setLoading(false); }
             };
 
-            // 全ユーザーのauth一覧を取得
             useEffect(() => {
                 if (step !== 'menu') return;
                 const fetchUsers = async () => {
                     try {
                         const found = [];
-                        // まず市内の学校一覧を settings/schools_list から取得
-                        // なければ collectionGroup で settings コレクションを探索
                         let schoolIds = [];
                         try {
-                            // cities/{cityId}/schools 直下のサブコレクション一覧は
-                            // クライアントSDKでは取得不可のため、
-                            // 登録済みの学校リストドキュメントから取得する
                             const schoolsDoc = await db.collection(`cities/${cityId}/settings`).doc('schools_list').get();
                             if (schoolsDoc.exists && Array.isArray(schoolsDoc.data().list)) {
                                 schoolIds = schoolsDoc.data().list;
                             }
-                        } catch { /* 取得失敗は無視 */ }
+                        } catch { }
 
-                        // 学校リストが取得できた場合、各学校のユーザーを取得
                         for (const sId of schoolIds) {
                             try {
                                 const usersSnap = await db.collection(`cities/${cityId}/schools/${sId}/users`).get();
@@ -392,18 +471,16 @@
                                         if (authDoc.exists && authDoc.data().passwordHash) {
                                             found.push({ schoolId: sId, userId: uDoc.id });
                                         }
-                                    } catch { /* 個別取得失敗は無視 */ }
+                                    } catch { }
                                 }
-                            } catch { /* 学校取得失敗は無視 */ }
+                            } catch { }
                         }
-
                         setUsers(found);
                     } catch { setUsers([]); }
                 };
                 fetchUsers();
             }, [step]);
 
-            // パスワードリセット実行
             const handleReset = async () => {
                 if (!resetTarget) return;
                 setLoading(true);
@@ -417,12 +494,10 @@
                 finally { setLoading(false); }
             };
 
-            // 管理者パスワード変更用state
             const [newAdminPw, setNewAdminPw] = useState('');
             const [newAdminPwConfirm, setNewAdminPwConfirm] = useState('');
             const [changeDone, setChangeDone] = useState(false);
 
-            // 管理者パスワード変更実行
             const handleChangeAdminPassword = async (e) => {
                 e.preventDefault();
                 if (newAdminPw.length < 6) { setError('新しいパスワードは6文字以上にしてください。'); return; }
@@ -441,8 +516,6 @@
             return (
                 <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center p-4 z-[80] print-hidden">
                     <div className="bg-white rounded-3xl w-full max-w-md p-8 border-t-8 border-blue-600 shadow-2xl">
-
-                        {/* ===== 管理者ログイン ===== */}
                         {step === 'login' && (
                         <div>
                             <h2 className="text-xl font-black mb-1 flex items-center gap-2">🔧 管理者メニュー</h2>
@@ -464,17 +537,17 @@
                         </div>
                         )}
 
-                        {/* ===== 管理者メニュー ===== */}
                         {step === 'menu' && (
                         <div>
                             <h2 className="text-xl font-black mb-1 flex items-center gap-2">🔧 管理者メニュー</h2>
-                            <p className="text-xs font-bold text-slate-500 mb-4">{cityId} — ユーザーのパスワードリセット</p>
+                            <p className="text-xs font-bold text-slate-500 mb-4">{cityId} — 管理設定</p>
 
                             {resetDone && (
                                 <div className="mb-4 bg-emerald-50 border border-emerald-300 rounded-xl p-3 text-sm font-black text-emerald-700">✅ パスワードをリセットしました。対象ユーザーは次回ログイン時に新しいパスワードを設定できます。</div>
                             )}
 
-                            {/* リセット確認 */}
+                            <AdminAiLimitSection cityId={cityId} />
+
                             {resetTarget && (
                                 <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-xl p-4">
                                     <p className="text-sm font-black text-red-700 mb-3">
@@ -493,7 +566,6 @@
                                 </div>
                             )}
 
-                            {/* ユーザー一覧 */}
                             <div className="border-2 border-slate-200 rounded-2xl overflow-hidden max-h-64 overflow-y-auto">
                                 {users.length === 0 ? (
                                     <div className="p-5 text-center text-slate-400 font-bold text-sm">
@@ -526,11 +598,6 @@
                                 )}
                             </div>
 
-                            <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-3">
-                                <p className="text-xs font-bold text-amber-700">💡 ユーザーが表示されない場合は、Firebaseコンソールから直接 <code>cities/{cityId}/schools/（学校ID）/users/（個人ID）/settings/auth</code> ドキュメントを削除することでもリセットできます。</p>
-                            </div>
-
-                            {/* 管理者パスワード変更ボタン */}
                             <button
                                 type="button"
                                 onClick={() => { setError(''); setNewAdminPw(''); setNewAdminPwConfirm(''); setChangeDone(false); setStep('change_password'); }}
@@ -542,7 +609,6 @@
                         </div>
                         )}
 
-                        {/* ===== 管理者パスワード変更 ===== */}
                         {step === 'change_password' && (
                         <div>
                             <h2 className="text-xl font-black mb-1 flex items-center gap-2">🔑 管理者パスワードの変更</h2>
@@ -606,7 +672,7 @@
         }
 
         function LoginScreen({ onLogin }) {
-            const [step, setStep] = useState('input');   // 'input' | 'new_password' | 'verify_password'
+            const [step, setStep] = useState('input');
             const [city, setCity]     = useState('');
             const [school, setSchool] = useState('');
             const [user, setUser]     = useState('');
@@ -615,7 +681,6 @@
             const [error, setError]   = useState('');
             const [loading, setLoading] = useState(false);
 
-            // 次へ：IDを確認してパスワード登録済みか調べる
             const handleCheckId = async (e) => {
                 e.preventDefault();
                 if (!city.trim() || !school.trim() || !user.trim()) return;
@@ -635,7 +700,6 @@
                 }
             };
 
-            // 新規パスワード設定して保存
             const handleSetPassword = async (e) => {
                 e.preventDefault();
                 if (password.length < 4) { setError('パスワードは4文字以上で設定してください。'); return; }
@@ -645,9 +709,7 @@
                 try {
                     const hash = await hashPassword(password);
                     const c = city.trim(), s = school.trim(), u = user.trim();
-                    // authドキュメント保存
                     await db.collection(`cities/${c}/schools/${s}/users/${u}/settings`).doc('auth').set({ passwordHash: hash, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-                    // 管理者がユーザー一覧を取得できるよう学校IDをschools_listに登録
                     await db.collection(`cities/${c}/settings`).doc('schools_list').set({ list: firebase.firestore.FieldValue.arrayUnion(s) }, { merge: true });
                     onLogin(c, s, u);
                 } catch (err) {
@@ -657,7 +719,6 @@
                 }
             };
 
-            // パスワード照合
             const handleVerifyPassword = async (e) => {
                 e.preventDefault();
                 setLoading(true);
@@ -683,7 +744,6 @@
                         <h1 className="text-3xl sm:text-4xl font-black text-emerald-600 mb-2 text-center tracking-tight">HasuNet</h1>
                         <p className="text-center text-sm font-bold text-slate-400 mb-6">Task ＆ Knowledge</p>
 
-                        {/* ===== STEP 1: ID入力 ===== */}
                         {step === 'input' && (
                             <form onSubmit={handleCheckId} className="space-y-4">
                                 <input value={city} onChange={e=>setCity(e.target.value)} placeholder="市町村ID" className="w-full p-4 border-2 rounded-xl font-bold bg-slate-50 outline-none focus:border-emerald-400" required />
@@ -696,15 +756,12 @@
                             </form>
                         )}
 
-                        {/* ===== STEP 2a: 新規パスワード設定 ===== */}
                         {step === 'new_password' && (
                             <div>
                                 <div className="mb-5 bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
                                     <p className="text-sm font-black text-emerald-700 mb-1">🔑 初回ログイン — パスワードを設定してください</p>
                                     <p className="text-xs font-bold text-emerald-600">個人ID: <span className="bg-white px-2 py-0.5 rounded border">{user}</span></p>
                                 </div>
-
-                                {/* ⚠️ 注意喚起（管理者リセット対応版） */}
                                 <div className="mb-5 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4">
                                     <p className="text-sm font-black text-amber-800 mb-2">⚠️ パスワードについての注意事項</p>
                                     <ul className="text-xs font-bold text-amber-700 leading-relaxed space-y-1.5">
@@ -714,7 +771,6 @@
                                         <li>・管理者がいない場合は、Firebaseコンソールからの対応が必要になります。</li>
                                     </ul>
                                 </div>
-
                                 <form onSubmit={handleSetPassword} className="space-y-4">
                                     <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="パスワード（4文字以上）" className="w-full p-4 border-2 rounded-xl font-bold bg-slate-50 outline-none focus:border-emerald-400" required />
                                     <input type="password" value={passwordConfirm} onChange={e=>setPasswordConfirm(e.target.value)} placeholder="パスワード（確認）" className="w-full p-4 border-2 rounded-xl font-bold bg-slate-50 outline-none focus:border-emerald-400" required />
@@ -727,21 +783,17 @@
                             </div>
                         )}
 
-                        {/* ===== STEP 2b: パスワード照合 ===== */}
                         {step === 'verify_password' && (
                             <div>
                                 <div className="mb-5 bg-slate-50 border border-slate-200 rounded-2xl p-4">
                                     <p className="text-xs font-bold text-slate-500 mb-1">ログイン中のID</p>
                                     <p className="text-sm font-black text-slate-700">{city} / {school} / {user}</p>
                                 </div>
-
-                                {/* ⚠️ 注意喚起（照合画面） */}
                                 <div className="mb-5 bg-amber-50 border border-amber-200 rounded-2xl p-3">
                                     <p className="text-xs font-bold text-amber-700">
                                         ⚠️ パスワードを忘れた場合は管理者にリセットを依頼してください。
                                     </p>
                                 </div>
-
                                 <form onSubmit={handleVerifyPassword} className="space-y-4">
                                     <input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="パスワード" className="w-full p-4 border-2 rounded-xl font-bold bg-slate-50 outline-none focus:border-emerald-400" required autoFocus />
                                     {error && <p className="text-red-500 text-sm font-bold text-center">{error}</p>}
@@ -757,7 +809,7 @@
             );
         }
 
-        function TaskCard({ task, slot, progressDoc, onToggle, onToggleSubtask, onEdit, onDelete, onDuplicate }) {
+        function TaskCard({ task, slot, progressDoc, taskTagsMaster, onToggle, onToggleSubtask, onEdit, onDelete, onDuplicate }) {
             const isDone = progressDoc?.isCompleted || false, subProgress = progressDoc?.subtasksProgress || [], vis = VIS_CONF[task.visibility || 'public'];
             return (
                 <div className={`group flex flex-col gap-3 p-5 rounded-2xl border-2 transition-all ${isDone ? 'bg-slate-50 opacity-60' : 'bg-white hover:shadow-md'}`}>
@@ -765,7 +817,10 @@
                         <div className="flex flex-wrap gap-2 flex-1 items-center">
                             <span className={`text-[11px] font-black px-2 py-1 rounded-md ${vis.bg} ${vis.text}`}>{vis.icon} {vis.label}</span>
                             <span className="text-[11px] font-black text-slate-600 bg-slate-100 px-2 py-1 rounded-md border">{task.domain || '未分類'}</span>
-                            {Array.isArray(task.tags) && task.tags.map(t => <span key={t} className="text-[10px] font-bold text-slate-500 border px-2 py-1 rounded-md">{t==='重要'&&<span className="text-red-500">🔥</span>}{t}</span>)}
+                            {Array.isArray(task.tags) && [...task.tags].sort((a,b)=>{
+                                const idxA = taskTagsMaster.indexOf(a); const idxB = taskTagsMaster.indexOf(b);
+                                return (idxA!==-1?idxA:999) - (idxB!==-1?idxB:999);
+                            }).map(t => <span key={t} className="text-[10px] font-bold text-slate-500 border px-2 py-1 rounded-md">{t==='重要'&&<span className="text-red-500">🔥</span>}{t}</span>)}
                         </div>
                         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
                             <button onClick={() => onDuplicate(task)} className="p-1.5 text-slate-400 hover:text-purple-500 bg-slate-100 rounded text-sm" title="自分用に複製">📋</button>
@@ -792,7 +847,16 @@
         function TaskBoard({ cityId, schoolId, userId, onPrint }) {
             const [currentIndex, setCurrentIndex] = useState(() => getCurrentSlotIndex()), activeSlot = ALL_SLOTS[currentIndex];
             const [tasks, setTasks] = useState({ public: [], school: [], private: [] }), [progressData, setProgressData] = useState({});
-            const [modalConfig, setModalConfig] = useState({ isOpen: false, editingTask: null }), [domains, setDomains] = useState(defaultTaskDomains), [showDomainModal, setShowDomainModal] = useState(false), [newDomainInput, setNewDomainInput] = useState('');
+            const [modalConfig, setModalConfig] = useState({ isOpen: false, editingTask: null });
+            
+            const [domains, setDomains] = useState(defaultTaskDomains);
+            const [showDomainModal, setShowDomainModal] = useState(false);
+            const [newDomainInput, setNewDomainInput] = useState('');
+
+            const [taskTags, setTaskTags] = useState(defaultTaskTags);
+            const [showTaskTagModal, setShowTaskTagModal] = useState(false);
+            const [newTaskTagInput, setNewTaskTagInput] = useState('');
+
             const [showCompleted, setShowCompleted] = useState(false);
             const fileInputRef = useRef(null);
 
@@ -800,12 +864,35 @@
                 const unsubs = ['public', 'school', 'private'].map(vis => db.collection(getColPath(cityId, schoolId, userId, 'tasks', vis)).onSnapshot(s => setTasks(p => ({ ...p, [vis]: s.docs.map(d => ({ id: d.id, visibility: vis, ...d.data() })) }))));
                 unsubs.push(db.collection(`cities/${cityId}/schools/${schoolId}/users/${userId}/task_progress`).onSnapshot(s => { const prog = {}; s.docs.forEach(d => { prog[d.id] = d.data(); }); setProgressData(prog); }));
                 unsubs.push(db.collection(`cities/${cityId}/settings`).doc('task_domains').onSnapshot(s => setDomains(s.exists && s.data().list?.length>0 ? s.data().list : defaultTaskDomains)));
+                unsubs.push(db.collection(`cities/${cityId}/settings`).doc('task_tags').onSnapshot(s => setTaskTags(s.exists && s.data().list?.length>0 ? s.data().list : defaultTaskTags)));
                 return () => unsubs.forEach(f => f());
             }, [cityId, schoolId, userId]);
 
-            const updateDomainSetting = (newList) => db.collection(`cities/${cityId}/settings`).doc('task_domains').set({ list: newList }, { merge: true });
-            const addDomain = () => { if(newDomainInput.trim()) { updateDomainSetting([...new Set([...domains, newDomainInput.trim()])]); setNewDomainInput(''); } };
-            const removeDomain = (d) => { if(window.confirm(`「${d}」を削除しますか？`)) updateDomainSetting(domains.filter(x => x !== d)); };
+            const handleEditDomain = async (oldVal, newVal) => {
+                const newList = domains.map(d => d === oldVal ? newVal : d);
+                db.collection(`cities/${cityId}/settings`).doc('task_domains').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'tasks', 'domain', oldVal, newVal);
+            };
+
+            const handleEditTaskTag = async (oldVal, newVal) => {
+                const newList = taskTags.map(t => t === oldVal ? newVal : t);
+                db.collection(`cities/${cityId}/settings`).doc('task_tags').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'tasks', 'task_tags', oldVal, newVal);
+            };
+
+            const handleReorderDomain = (from, to) => {
+                const newList = [...domains];
+                const [moved] = newList.splice(from, 1);
+                newList.splice(to, 0, moved);
+                db.collection(`cities/${cityId}/settings`).doc('task_domains').set({list: newList}, {merge: true});
+            };
+
+            const handleReorderTaskTag = (from, to) => {
+                const newList = [...taskTags];
+                const [moved] = newList.splice(from, 1);
+                newList.splice(to, 0, moved);
+                db.collection(`cities/${cityId}/settings`).doc('task_tags').set({list: newList}, {merge: true});
+            };
 
             const handleToggleTask = (taskId, slot, currentStatus) => db.collection(`cities/${cityId}/schools/${schoolId}/users/${userId}/task_progress`).doc(`${taskId}_${slot}`).set({ isCompleted: !currentStatus }, { merge: true });
             const handleToggleSubtask = (taskId, slot, subtaskIndex, currentStatus) => {
@@ -832,14 +919,22 @@
                 }
             };
             
+            const sortTasks = (taskList) => {
+                return [...taskList].sort((a, b) => {
+                    const idxA = domains.indexOf(a.domain);
+                    const idxB = domains.indexOf(b.domain);
+                    return (idxA !== -1 ? idxA : 999) - (idxB !== -1 ? idxB : 999);
+                });
+            };
+
             const allFilteredTasks = [...tasks.public, ...tasks.school, ...tasks.private].filter(t => isTaskInSlot(t, activeSlot));
-            const incompleteTasks = allFilteredTasks.filter(t => !(progressData[`${t.id}_${activeSlot}`]?.isCompleted || false));
-            const completedTasks = allFilteredTasks.filter(t => progressData[`${t.id}_${activeSlot}`]?.isCompleted || false);
+            const incompleteTasks = sortTasks(allFilteredTasks.filter(t => !(progressData[`${t.id}_${activeSlot}`]?.isCompleted || false)));
+            const completedTasks = sortTasks(allFilteredTasks.filter(t => progressData[`${t.id}_${activeSlot}`]?.isCompleted || false));
 
             const exportExcel = () => {
                 const isSingleTaskCompleted = (t) => t.recurringType === 'none' && Object.keys(progressData).some(key => key.startsWith(t.id + '_') && progressData[key].isCompleted);
-                const exportData = [...tasks.public, ...tasks.school, ...tasks.private]
-                    .filter(t => showCompleted ? true : !isSingleTaskCompleted(t))
+                const exportData = sortTasks([...tasks.public, ...tasks.school, ...tasks.private]
+                    .filter(t => showCompleted ? true : !isSingleTaskCompleted(t)))
                     .map(t => ({ id: t.id, visibility: t.visibility||'public', title: t.title, domain: t.domain||'', recurringType: t.recurringType||'none', targetMonths: (t.targetMonths||[]).join('|'), timingSlots: (t.timingSlots||[]).join('|'), tags: (t.tags||[]).join('|'), subtasks: (t.subtasks||[]).join('|'), notes: t.notes||'' }));
                 const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(exportData), "Tasks"); XLSX.writeFile(wb, `タスク一覧_${new Date().toISOString().slice(0,10)}.xlsx`);
             };
@@ -889,24 +984,25 @@
                         </div>
                         <div className="space-y-4">
                             {incompleteTasks.length === 0 && (!showCompleted || completedTasks.length === 0) && <div className="text-center text-slate-400 mt-16 font-bold text-lg"><span className="text-6xl block mb-4">☕</span>タスクはありません</div>}
-                            {incompleteTasks.map(t => <TaskCard key={t.id} task={t} slot={activeSlot} progressDoc={progressData[`${t.id}_${activeSlot}`]} onToggle={handleToggleTask} onToggleSubtask={handleToggleSubtask} onEdit={task=>setModalConfig({isOpen:true, editingTask:task})} onDelete={handleDeleteTask} onDuplicate={handleDuplicate} />)}
+                            {incompleteTasks.map(t => <TaskCard key={t.id} task={t} slot={activeSlot} progressDoc={progressData[`${t.id}_${activeSlot}`]} taskTagsMaster={taskTags} onToggle={handleToggleTask} onToggleSubtask={handleToggleSubtask} onEdit={task=>setModalConfig({isOpen:true, editingTask:task})} onDelete={handleDeleteTask} onDuplicate={handleDuplicate} />)}
                             {showCompleted && completedTasks.length > 0 && (
                                 <div className="pt-8 mt-8 border-t-2 border-dashed border-slate-300">
                                     <h4 className="text-sm font-bold text-slate-500 mb-4 flex items-center gap-2">✅ 完了済みのタスク</h4>
                                     <div className="space-y-4 opacity-70">
-                                        {completedTasks.map(t => <TaskCard key={t.id} task={t} slot={activeSlot} progressDoc={progressData[`${t.id}_${activeSlot}`]} onToggle={handleToggleTask} onToggleSubtask={handleToggleSubtask} onEdit={task=>setModalConfig({isOpen:true, editingTask:task})} onDelete={handleDeleteTask} onDuplicate={handleDuplicate} />)}
+                                        {completedTasks.map(t => <TaskCard key={t.id} task={t} slot={activeSlot} progressDoc={progressData[`${t.id}_${activeSlot}`]} taskTagsMaster={taskTags} onToggle={handleToggleTask} onToggleSubtask={handleToggleSubtask} onEdit={task=>setModalConfig({isOpen:true, editingTask:task})} onDelete={handleDeleteTask} onDuplicate={handleDuplicate} />)}
                                     </div>
                                 </div>
                             )}
                         </div>
                     </div>
-                    {modalConfig.isOpen && <TaskModal cityId={cityId} schoolId={schoolId} userId={userId} config={modalConfig} closeModal={()=>setModalConfig({isOpen:false})} defaultSlot={activeSlot} domains={domains} openDomainModal={()=>setShowDomainModal(true)} />}
-                    {showDomainModal && <SettingModal title="業務領域のカスタマイズ" items={domains} newItem={newDomainInput} setNewItem={setNewDomainInput} onAdd={()=>{if(newDomainInput.trim())db.collection(`cities/${cityId}/settings`).doc('task_domains').set({list:[...new Set([...domains,newDomainInput.trim()])]},{merge:true});setNewDomainInput('');}} onRemove={d=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('task_domains').set({list:domains.filter(x=>x!==d)},{merge:true});}} onClose={()=>setShowDomainModal(false)} />}
+                    {modalConfig.isOpen && <TaskModal cityId={cityId} schoolId={schoolId} userId={userId} config={modalConfig} closeModal={()=>setModalConfig({isOpen:false})} defaultSlot={activeSlot} domains={domains} openDomainModal={()=>setShowDomainModal(true)} taskTags={taskTags} openTaskTagModal={()=>setShowTaskTagModal(true)} />}
+                    {showDomainModal && <SettingModal title="業務領域のカスタマイズ" items={domains} newItem={newDomainInput} setNewItem={setNewDomainInput} onAdd={()=>{if(newDomainInput.trim())db.collection(`cities/${cityId}/settings`).doc('task_domains').set({list:[...new Set([...domains,newDomainInput.trim()])]},{merge:true});setNewDomainInput('');}} onRemove={d=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('task_domains').set({list:domains.filter(x=>x!==d)},{merge:true});}} onEdit={handleEditDomain} onReorder={handleReorderDomain} onClose={()=>setShowDomainModal(false)} />}
+                    {showTaskTagModal && <SettingModal title="タスクのタグ" items={taskTags} newItem={newTaskTagInput} setNewItem={setNewTaskTagInput} onAdd={()=>{if(newTaskTagInput.trim())db.collection(`cities/${cityId}/settings`).doc('task_tags').set({list:[...new Set([...taskTags,newTaskTagInput.trim()])]},{merge:true});setNewTaskTagInput('');}} onRemove={t=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('task_tags').set({list:taskTags.filter(x=>x!==t)},{merge:true});}} onEdit={handleEditTaskTag} onReorder={handleReorderTaskTag} onClose={()=>setShowTaskTagModal(false)} />}
                 </div>
             );
         }
 
-        function TaskModal({ cityId, schoolId, userId, config, closeModal, defaultSlot, domains, openDomainModal }) {
+        function TaskModal({ cityId, schoolId, userId, config, closeModal, defaultSlot, domains, openDomainModal, taskTags, openTaskTagModal }) {
             const t = config.editingTask || {};
             const [vis, setVis]       = useState(t.visibility || 'public');
             const [title, setTitle]   = useState(t.title || '');
@@ -919,14 +1015,10 @@
             const [tMonths, setTMonths] = useState(t.targetMonths || [defaultSlot.slice(0, -2)]);
             const [tSlots, setTSlots]   = useState([...new Set(t.timingSlots?.map(s => s.slice(-2)) || [defaultSlot.slice(-2)])]);
 
-            // 2段階確認用
             const [showConfirm, setShowConfirm] = useState(false);
-
-            // 編集時に確認が必要な公開範囲か
             const isEditing      = !!t.id;
             const needsConfirm   = isEditing && (t.visibility === 'public' || t.visibility === 'school');
 
-            // 差分計算
             const getDiff = () => {
                 const fmtMonths  = v => (Array.isArray(v) && v.length > 0) ? v.join(', ') : '(なし)';
                 const fmtSlots   = v => (Array.isArray(v) && v.length > 0) ? v.join(', ') : '(なし)';
@@ -947,7 +1039,6 @@
                 return fields.map(f => ({ ...f, changed: f.before !== f.after }));
             };
 
-            // Firestoreへ実際に保存
             const commitSave = () => {
                 const p = { title, domain, tags, subtasks: sub, recurringType: rType, timingSlots: tSlots, notes, targetMonths: (rType === 'none' || rType === 'yearly_custom') ? tMonths : [] };
                 const cPath = getColPath(cityId, schoolId, userId, 'tasks', vis);
@@ -969,9 +1060,9 @@
                 if (tSlots.length === 0) return alert('時期を選択してください');
                 if ((rType === 'none' || rType === 'yearly_custom') && tMonths.length === 0) return alert('月を選択してください');
                 if (needsConfirm) {
-                    setShowConfirm(true); // 確認ステップへ
+                    setShowConfirm(true);
                 } else {
-                    commitSave();         // 自分のみは即保存
+                    commitSave();
                 }
             };
 
@@ -982,8 +1073,6 @@
             return (
                 <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center p-4 z-50 overflow-y-auto print-hidden">
                     <div className={`bg-white rounded-3xl w-full max-w-xl p-8 my-8 transition-all ${showConfirm ? 'border-t-8 border-amber-500' : 'border-t-8 border-emerald-600'}`}>
-
-                        {/* ===== 編集フォーム ===== */}
                         {!showConfirm && (
                         <>
                             <h2 className="text-2xl font-black mb-6">{isEditing ? '✏️ タスクを編集' : '✨ 新規タスク'}</h2>
@@ -1000,7 +1089,17 @@
                                 <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="タスク名 *" className="w-full p-3 border-2 rounded-xl font-bold outline-none" required />
                                 <div className="grid grid-cols-2 gap-4"><div className="flex gap-2"><select value={domain} onChange={e=>setDomain(e.target.value)} className="w-full p-2 border-2 rounded-xl">{domains.map(d=><option key={d}>{d}</option>)}</select><button type="button" onClick={openDomainModal} className="px-3 bg-slate-200 rounded-xl">⚙️</button></div><select value={rType} onChange={e=>setRType(e.target.value)} className="w-full p-2 border-2 rounded-xl">{RECURRING_OPTIONS.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
                                 <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="備考・注意点" className="w-full p-3 border-2 rounded-xl text-sm h-16"></textarea>
-                                <div className="flex flex-wrap gap-2">{TASK_TAGS.map(tg=><button type="button" key={tg} onClick={()=>setTags(p=>p.includes(tg)?p.filter(x=>x!==tg):[...p,tg])} className={`px-2 py-1 rounded text-xs font-bold border ${tags.includes(tg)?'bg-slate-700 text-white':'bg-white text-slate-500'}`}>{tg}</button>)}</div>
+                                
+                                <div className="p-4 border-2 border-dashed rounded-xl bg-slate-50">
+                                    <div className="flex justify-between mb-2">
+                                        <span className="text-sm font-bold text-slate-500">🏷️ タグ</span>
+                                        <button type="button" onClick={openTaskTagModal} className="text-sm text-emerald-600 font-bold">⚙️ 編集</button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {taskTags.map(tg=><button type="button" key={tg} onClick={()=>setTags(p=>p.includes(tg)?p.filter(x=>x!==tg):[...p,tg])} className={`px-2 py-1 rounded text-xs font-bold border ${tags.includes(tg)?'bg-slate-700 text-white':'bg-white text-slate-500'}`}>{tg}</button>)}
+                                    </div>
+                                </div>
+
                                 <div className="bg-emerald-50 p-4 rounded-xl border">
                                     {(rType==='none'||rType==='yearly_custom') && <div className="grid grid-cols-6 gap-2 mb-4 border-b pb-4">{baseMonths.map(m=><label key={m} className="flex items-center text-xs font-bold bg-white p-1 rounded border"><input type="checkbox" checked={tMonths.includes(m)} onChange={()=>setTMonths(p=>p.includes(m)?p.filter(x=>x!==m):[...p,m])} className="mr-1 accent-emerald-600"/>{m}</label>)}</div>}
                                     <div className="flex gap-4">{subPeriods.map(p=><label key={p} className="flex items-center font-bold bg-white px-3 py-1 rounded border"><input type="checkbox" checked={tSlots.includes(p)} onChange={()=>setTSlots(pr=>pr.includes(p)?pr.filter(x=>x!==p):[...pr,p])} className="mr-2 accent-emerald-600"/>{p}</label>)}</div>
@@ -1019,7 +1118,6 @@
                         </>
                         )}
 
-                        {/* ===== 変更確認ステップ ===== */}
                         {showConfirm && (
                         <div>
                             <div className="flex items-center gap-3 mb-2">
@@ -1085,13 +1183,11 @@
             );
         }
 
-        // ==========================================
-        // ★ ナレッジベースタブ
-        // ==========================================
         const defaultKnowledgeCategories = ['年度・行事', '給与・手当', '出張・旅費', '人事・服務', 'システム・機器'];
         const defaultKnowledgeTimings = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月', '毎月', '不定期'];
         const defaultKnowledgeTags = ['規程', '手順', 'Tips', '様式', 'よくある質問'];
         const defaultKnowledgeStakeholders = ['教育委員会 職員課', '教育委員会 学務課', '市役所 財務課', '県教育委員会', '年金事務所'];
+        const defaultKnowledgeSources = ['給与法', '旅費法', '地方公務員法', '学校教育法', '教育基本法'];
 
         function KnowledgeTab({ cityId, schoolId, userId, onPrint, onPrintAll }) {
             const [knowledges, setKnowledges] = useState({ public: [], school: [], private: [] });
@@ -1099,7 +1195,24 @@
             const [categories, setCategories] = useState(defaultKnowledgeCategories);
             const [timings, setTimings] = useState(defaultKnowledgeTimings);
             const [tagsMaster, setTagsMaster] = useState(defaultKnowledgeTags); 
-            const [stakeholdersList, setStakeholdersList] = useState(defaultKnowledgeStakeholders); 
+            const [stakeholdersList, setStakeholdersList] = useState(defaultKnowledgeStakeholders);
+            const [sourcesMaster, setSourcesMaster] = useState(defaultKnowledgeSources);
+
+            const [aiUsageCount, setAiUsageCount] = useState(0);
+            const [aiDailyLimit, setAiDailyLimit] = useState(150);
+            const todayKey = () => { const d = new Date(); return `aiUsageCount_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`; };
+
+            const incrementAiUsage = async () => {
+                const key = todayKey();
+                const ref = db.collection(`cities/${cityId}/settings`).doc('ai_usage');
+                await ref.set({ [key]: firebase.firestore.FieldValue.increment(1) }, { merge: true });
+            };
+
+            const recordHistory = (targetId, operationType) => {
+                db.collection(`cities/${cityId}/knowledge_history`).add({
+                    targetId, operationDate: firebase.firestore.FieldValue.serverTimestamp(), schoolName: schoolId, userName: userId, operationType,
+                });
+            };
 
             const [searchQuery, setSearchQuery] = useState('');
             const [filterCategory, setFilterCategory] = useState('');
@@ -1111,10 +1224,12 @@
             const [showTimeModal, setShowTimeModal] = useState(false);
             const [showTagModal, setShowTagModal] = useState(false); 
             const [showStakeholderModal, setShowStakeholderModal] = useState(false);
-            const [showExportMenu, setShowExportMenu] = useState(false); // ★ エクスポートメニュー
+            const [showSourceModal, setShowSourceModal] = useState(false);
+            const [showExportMenu, setShowExportMenu] = useState(false);
             const exportMenuRef = useRef(null);
 
-            // メニュー外クリックで閉じる（useRefで要素を判定）
+            const [historyModal, setHistoryModal] = useState({ isOpen: false, itemTitle: '', items: [] });
+
             useEffect(() => {
                 if (!showExportMenu) return;
                 const close = (e) => {
@@ -1129,14 +1244,14 @@
             const [newCat, setNewCat] = useState('');
             const [newTime, setNewTime] = useState('');
             const [newTag, setNewTag] = useState(''); 
-            const [newStakeholder, setNewStakeholder] = useState(''); 
+            const [newStakeholder, setNewStakeholder] = useState('');
+            const [newSource, setNewSource] = useState('');
 
             const [itemModal, setItemModal] = useState({ isOpen: false, itemId: null });
             const [formData, setFormData] = useState({});
-            const [editOrigin, setEditOrigin] = useState(null);       // 編集開始時の元データ
-            const [showSaveConfirm, setShowSaveConfirm] = useState(false); // 変更確認ステップ表示フラグ
+            const [editOrigin, setEditOrigin] = useState(null);
+            const [showSaveConfirm, setShowSaveConfirm] = useState(false);
             
-            const [summaryConfig, setSummaryConfig] = useState({ isOpen: false, loading: false, text: '', title: '' });
             const [isAILoading, setIsAILoading] = useState(false);
             const fileInputRef = useRef(null);
             const pdfInputRef = useRef(null);
@@ -1147,11 +1262,67 @@
                 unsubs.push(db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').onSnapshot(s => setTimings(s.exists?s.data().list:defaultKnowledgeTimings)));
                 unsubs.push(db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').onSnapshot(s => setTagsMaster(s.exists?s.data().list:defaultKnowledgeTags)));
                 unsubs.push(db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').onSnapshot(s => setStakeholdersList(s.exists?s.data().list:defaultKnowledgeStakeholders)));
+                unsubs.push(db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').onSnapshot(s => setSourcesMaster(s.exists?s.data().list:defaultKnowledgeSources)));
+                unsubs.push(db.collection(`cities/${cityId}/settings`).doc('ai_usage').onSnapshot(s => {
+                    if (s.exists) {
+                        const data = s.data();
+                        const key = todayKey();
+                        setAiUsageCount(data[key] || 0);
+                        setAiDailyLimit(data.aiDailyLimit ?? 150);
+                    }
+                }));
                 return () => unsubs.forEach(f => f());
             }, [cityId, schoolId, userId]);
 
+            const handleEditCategory = async (oldVal, newVal) => {
+                const newList = categories.map(c => c === oldVal ? newVal : c);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'knowledge', 'category', oldVal, newVal);
+            };
+            const handleEditTiming = async (oldVal, newVal) => {
+                const newList = timings.map(t => t === oldVal ? newVal : t);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'knowledge', 'timing', oldVal, newVal);
+            };
+            const handleEditTag = async (oldVal, newVal) => {
+                const newList = tagsMaster.map(t => t === oldVal ? newVal : t);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'knowledge', 'tags', oldVal, newVal);
+            };
+            const handleEditStakeholder = async (oldVal, newVal) => {
+                const newList = stakeholdersList.map(s => s === oldVal ? newVal : s);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'knowledge', 'stakeholders', oldVal, newVal);
+            };
+            const handleEditSource = async (oldVal, newVal) => {
+                const newList = sourcesMaster.map(s => s === oldVal ? newVal : s);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({ list: newList }, { merge: true });
+                await updateRelatedData(cityId, schoolId, userId, 'knowledge', 'sources', oldVal, newVal);
+            };
+
+            const handleReorderCategory = (from, to) => {
+                const newList = [...categories]; const [m] = newList.splice(from, 1); newList.splice(to, 0, m);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({list: newList}, {merge: true});
+            };
+            const handleReorderTiming = (from, to) => {
+                const newList = [...timings]; const [m] = newList.splice(from, 1); newList.splice(to, 0, m);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({list: newList}, {merge: true});
+            };
+            const handleReorderTag = (from, to) => {
+                const newList = [...tagsMaster]; const [m] = newList.splice(from, 1); newList.splice(to, 0, m);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({list: newList}, {merge: true});
+            };
+            const handleReorderStakeholder = (from, to) => {
+                const newList = [...stakeholdersList]; const [m] = newList.splice(from, 1); newList.splice(to, 0, m);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({list: newList}, {merge: true});
+            };
+            const handleReorderSource = (from, to) => {
+                const newList = [...sourcesMaster]; const [m] = newList.splice(from, 1); newList.splice(to, 0, m);
+                db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({list: newList}, {merge: true});
+            };
+
             const exportExcel = () => {
-                const data = [...knowledges.public, ...knowledges.school, ...knowledges.private].map(k => ({ id: k.id, visibility: k.visibility||'public', title: k.title, category: k.category, timing: k.timing, needsAttention: k.needsAttention?"TRUE":"FALSE", tags: (Array.isArray(k.selectedTags)?k.selectedTags:[]).join('|'), content: toSafeString(k.content), stakeholders: toSafeString(k.stakeholders), fileLocation: toSafeString(k.fileLocation) }));
+                const data = displayedItems.map(k => ({ id: k.id, visibility: k.visibility||'public', title: k.title, category: k.category, timing: k.timing, needsAttention: k.needsAttention?"TRUE":"FALSE", tags: (Array.isArray(k.selectedTags)?k.selectedTags:[]).join('|'), content: toSafeString(k.content), stakeholders: toSafeString(k.stakeholders), fileLocation: toSafeString(k.fileLocation) }));
                 const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "Knowledge"); XLSX.writeFile(wb, `マニュアル一覧_${new Date().toISOString().slice(0,10)}.xlsx`);
             };
 
@@ -1175,9 +1346,13 @@
 
             const getApiKey = async () => { const doc = await db.collection(`cities/${cityId}/settings`).doc('api_key').get(); return doc.exists ? doc.data().key : null; };
 
-            // ★ Fix 1: PDF読み込み & AI自動生成 - 型安全な処理
+            const aiUsageRate = aiDailyLimit > 0 ? aiUsageCount / aiDailyLimit : 0;
+            const aiLimitReached = aiUsageCount >= aiDailyLimit;
+            const aiNearLimit = aiUsageRate >= 0.8 && !aiLimitReached;
+
             const handlePdfUpload = async (e) => {
                 const file = e.target.files[0]; if (!file) return;
+                if (aiLimitReached) { alert('本日のAI利用上限に達しています。管理者にご連絡ください。'); e.target.value = ''; return; }
                 const apiKey = await getApiKey();
                 if (!apiKey) { alert("右上の「⚙️AI設定」からAPIキーを登録してください。"); e.target.value = ''; return; }
 
@@ -1189,22 +1364,33 @@
                         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ contents: [{ parts: [
-                                { text: `添付されたPDF資料を読み取り、学校事務職員向けの業務マニュアルとして整理してください。必ず以下のJSONフォーマットのみを返してください。Markdownの修飾（\`\`\`json 等）は含めないでください。\n\n{\n"title": "資料に基づく適切なタイトル",\n"category": "その他",\n"timing": "不定期",\n"stakeholders": "関係先が分かれば記載、なければ空文字",\n"content": "PDFの内容を箇条書き等で分かりやすく整理した具体的な手順や解説（必ず文字列で返してください）"\n}` },
+                                { text: `添付されたPDF資料を読み取り、学校事務職員向けの業務マニュアルとして整理してください。必ず以下のJSONフォーマットのみを返してください。Markdownの修飾（\`\`\`json 等）は含めないでください。\n\n{\n"title": "資料に基づく適切なタイトル",\n"category": "その他",\n"timing": "不定期",\n"stakeholders": "関係先が分かれば記載、なければ空文字",\n"content": "PDFの内容を箇条書き等で分かりやすく整理した具体的な手順や解説（必ず文字列で返してください）",\n"source": "文章内から根拠や出典（〇〇法、〇〇規程、〇〇通知など）を抽出。存在しない場合は空文字",\n"tags": ["内容を分析し検索に役立つキーワードを3〜5個自由に生成してください"]\n}` },
                                 { inline_data: { mime_type: "application/pdf", data: base64Data } }
                             ] }] })
                         });
                         const d = await res.json();
                         if (d.error) throw new Error(d.error.message);
+                        await incrementAiUsage();
                         if (d.candidates?.[0]?.content?.parts?.[0]?.text) {
                             let rText = d.candidates[0].content.parts[0].text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                             const parsed = JSON.parse(rText);
 
-                            // ★ 型安全変換: AIが配列やオブジェクトを返しても文字列に変換する
                             const safeTitle = toSafeString(parsed.title, 'PDFマニュアル');
                             const safeCategory = toSafeString(parsed.category, '');
                             const safeTiming = toSafeString(parsed.timing, '');
                             const safeStakeholders = toSafeString(parsed.stakeholders, '');
                             const safeContent = toSafeString(parsed.content, '');
+                            const safeSource = toSafeString(parsed.source, '');
+
+                            const newTags = Array.isArray(parsed.tags) ? parsed.tags.map(t => toSafeString(t)).filter(Boolean) : [];
+                            const mergedTags = [...new Set([...tagsMaster, ...newTags])];
+                            if (newTags.some(t => !tagsMaster.includes(t))) {
+                                db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({ list: mergedTags }, { merge: true });
+                            }
+
+                            if (safeSource && !sourcesMaster.includes(safeSource)) {
+                                db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({ list: [...new Set([...sourcesMaster, safeSource])] }, { merge: true });
+                            }
 
                             setFormData({ 
                                 visibility: 'public', 
@@ -1214,8 +1400,9 @@
                                 stakeholders: stakeholdersList.includes(safeStakeholders) ? safeStakeholders : '', 
                                 fileLocation: '', 
                                 content: safeContent, 
+                                selectedSources: safeSource ? [safeSource] : [],
                                 needsAttention: false, 
-                                selectedTags: [] 
+                                selectedTags: newTags.length > 0 ? newTags : []
                             });
                             setItemModal({ isOpen: true, itemId: null });
                         } else alert("AIからの応答がありませんでした。");
@@ -1224,19 +1411,18 @@
                 }; reader.readAsDataURL(file);
             };
 
-            // ★ Fix 2: 手動入力からの AI文章整理 - 型安全な処理
             const handleAIAssist = async () => {
+                if (aiLimitReached) return alert('本日のAI利用上限に達しています。管理者にご連絡ください。');
                 const apiKey = await getApiKey();
                 if (!apiKey) return alert("右上の「⚙️AI設定」からAPIキーを登録してください。");
                 if (!formData.content && !formData.title) return alert("タイトルまたは手順・内容を入力してください。");
                 setIsAILoading(true);
                 try {
-                    const prompt = `以下の学校事務マニュアルの入力内容を分析し、①文章を分かりやすく整理・推敲し、②最も適切な「分野」「時期」「関係先」を選び、③適切な「タグ」を選んでください。必ず以下のJSONフォーマットのみを返してください。Markdown修飾(\`\`\`json 等)は含めないでください。
+                    const prompt = `以下の学校事務マニュアルの入力内容を分析し、①文章を分かりやすく整理・推敲し、②最も適切な「分野」「時期」「関係先」を選び、③内容にふさわしいタイトルを考え、④検索に役立つキーワードをタグとして自由に生成し、⑤根拠・出典を抽出してください。必ず以下のJSONフォーマットのみを返してください。Markdown修飾(\`\`\`json 等)は含めないでください。
 
 【選択肢リスト】
 ・分野: ${categories.join(', ')}
 ・時期: ${timings.join(', ')}
-・タグ: ${tagsMaster.join(', ')}
 ・関係先: ${stakeholdersList.join(', ')}
 
 【入力内容】
@@ -1245,11 +1431,13 @@
 
 【出力JSONフォーマット】
 {
+  "title": "内容にふさわしいタイトル（入力タイトルを参考に最適なものを生成）",
   "content": "整理された分かりやすい本文（箇条書きなどを活用、元の意味は変えない、必ず文字列で返してください）",
   "category": "選択した分野",
   "timing": "選択した時期",
-  "tags": ["タグ1", "タグ2"],
-  "stakeholders": "選択した関係先（該当なしの場合は空文字）"
+  "tags": ["内容を分析し検索に役立つキーワードを3〜5個自由に生成"],
+  "stakeholders": "選択した関係先（該当なしの場合は空文字）",
+  "source": "文章内から根拠や出典（〇〇法、〇〇規程、〇〇通知など）を抽出。存在しない場合は空文字"
 }`;
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1257,47 +1445,41 @@
                     });
                     const d = await res.json();
                     if (d.error) throw new Error(d.error.message);
+                    await incrementAiUsage();
                     if (d.candidates?.[0]?.content?.parts?.[0]?.text) {
                         let rText = d.candidates[0].content.parts[0].text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                         const parsed = JSON.parse(rText);
 
-                        // ★ 型安全変換
+                        const safeTitle = toSafeString(parsed.title, '');
                         const safeContent = toSafeString(parsed.content, '');
                         const safeCategory = toSafeString(parsed.category, '');
                         const safeTiming = toSafeString(parsed.timing, '');
                         const safeStakeholders = toSafeString(parsed.stakeholders, '');
-                        const safeTags = Array.isArray(parsed.tags) 
-                            ? parsed.tags.map(t => toSafeString(t)).filter(t => tagsMaster.includes(t))
-                            : [];
+                        const safeSource = toSafeString(parsed.source, '');
+
+                        const newTags = Array.isArray(parsed.tags) ? parsed.tags.map(t => toSafeString(t)).filter(Boolean) : [];
+                        const mergedTags = [...new Set([...tagsMaster, ...newTags])];
+                        if (newTags.some(t => !tagsMaster.includes(t))) {
+                            db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({ list: mergedTags }, { merge: true });
+                        }
+
+                        if (safeSource && !sourcesMaster.includes(safeSource)) {
+                            db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({ list: [...new Set([...sourcesMaster, safeSource])] }, { merge: true });
+                        }
 
                         setFormData(prev => ({ 
-                            ...prev, 
+                            ...prev,
+                            title: safeTitle || prev.title,
                             content: safeContent || prev.content,
                             category: categories.includes(safeCategory) ? safeCategory : prev.category,
                             timing: timings.includes(safeTiming) ? safeTiming : prev.timing,
                             stakeholders: stakeholdersList.includes(safeStakeholders) ? safeStakeholders : prev.stakeholders,
-                            selectedTags: safeTags.length > 0 ? safeTags : prev.selectedTags
+                            selectedTags: newTags.length > 0 ? newTags : prev.selectedTags,
+                            selectedSources: safeSource ? [...new Set([...(Array.isArray(prev.selectedSources) ? prev.selectedSources : []), safeSource])] : (prev.selectedSources || []),
                         }));
                     } else alert("AI応答なし");
                 } catch (e) { alert("エラー: " + e.message); }
                 setIsAILoading(false);
-            };
-
-            const handleAISummary = async (item) => {
-                const apiKey = await getApiKey();
-                if (!apiKey) return alert("右上の「⚙️AI設定」からグループのAPIキーを登録してください。");
-                if (!item.content) return alert("要約する本文がありません。");
-                setSummaryConfig({ isOpen: true, loading: true, text: '', title: item.title });
-                try {
-                    const contentStr = toSafeString(item.content);
-                    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
-                        method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ contents: [{ parts: [{ text: `以下の業務マニュアルを、新人職員でもパッと理解できるように3行程度の箇条書きで分かりやすく要約・解説してください。\n\n【${item.title}】\n${contentStr}` }] }] })
-                    });
-                    const d = await res.json();
-                    if (d.candidates?.[0]?.content?.parts?.[0]?.text) setSummaryConfig({ isOpen: true, loading: false, text: d.candidates[0].content.parts[0].text, title: item.title });
-                    else { setSummaryConfig({ isOpen: false }); alert("AI応答なし"); }
-                } catch (e) { setSummaryConfig({ isOpen: false }); alert("エラー: " + e.message); }
             };
 
             const handleDuplicate = (item) => {
@@ -1305,15 +1487,13 @@
                 setItemModal({ isOpen: true, itemId: null });
             };
 
-            // ★ 削除確認: { itemId, inputValue, timerId }
             const [deleteConfirm, setDeleteConfirm] = useState(null);
 
             const startDeleteConfirm = (item) => {
-                // 既存のタイマーをクリア
                 if (deleteConfirm?.timerId) clearTimeout(deleteConfirm.timerId);
                 const timerId = setTimeout(() => {
                     setDeleteConfirm(null);
-                }, 10000); // 10秒でキャンセル
+                }, 10000);
                 setDeleteConfirm({ itemId: item.id, itemVisibility: item.visibility, itemTitle: item.title, inputValue: '', timerId });
             };
 
@@ -1327,13 +1507,19 @@
                 const { itemId, itemVisibility } = deleteConfirm;
                 if (deleteConfirm?.timerId) clearTimeout(deleteConfirm.timerId);
                 db.collection(getColPath(cityId, schoolId, userId, 'knowledge', itemVisibility)).doc(itemId).delete();
+                recordHistory(itemId, '削除');
                 setDeleteConfirm(null);
             };
 
-            // 削除確認の必要入力キーワード（タイトル先頭4文字、4文字未満の場合はタイトル全体）
             const getDeleteKeyword = (title) => title.length >= 4 ? title.slice(0, 4) : title;
 
-            const displayedItems = [...knowledges.public, ...knowledges.school, ...knowledges.private].filter(i => (!filterAttentionOnly||i.needsAttention) && (!filterCategory||i.category===filterCategory) && (!filterTiming||i.timing===filterTiming) && (!filterTag||(Array.isArray(i.selectedTags)&&i.selectedTags.includes(filterTag))) && (!searchQuery||i.title?.includes(searchQuery)||toSafeString(i.content).includes(searchQuery)));
+            const displayedItems = [...knowledges.public, ...knowledges.school, ...knowledges.private]
+                .filter(i => (!filterAttentionOnly||i.needsAttention) && (!filterCategory||i.category===filterCategory) && (!filterTiming||i.timing===filterTiming) && (!filterTag||(Array.isArray(i.selectedTags)&&i.selectedTags.includes(filterTag))) && (!searchQuery||i.title?.includes(searchQuery)||toSafeString(i.content).includes(searchQuery)))
+                .sort((a, b) => {
+                    const idxA = categories.indexOf(a.category);
+                    const idxB = categories.indexOf(b.category);
+                    return (idxA !== -1 ? idxA : 999) - (idxB !== -1 ? idxB : 999);
+                });
 
             return (
                 <div className="space-y-6 pb-32 animate-fade-in max-w-5xl mx-auto relative">
@@ -1353,7 +1539,6 @@
                             <input type="file" accept=".xlsx, .xls" ref={fileInputRef} onChange={importExcel} className="hidden" />
                             <button onClick={()=>fileInputRef.current.click()} className="bg-slate-200 font-bold px-4 py-2.5 rounded-xl text-sm">⬆️ Excel読込</button>
 
-                            {/* ★ エクスポートドロップダウン */}
                             <div className="relative" ref={exportMenuRef}>
                                 <button
                                     onClick={() => setShowExportMenu(v => !v)}
@@ -1366,7 +1551,6 @@
                                         <div className="px-4 py-2 bg-slate-50 border-b border-slate-200">
                                             <p className="text-xs font-black text-slate-500 tracking-wide">エクスポート形式を選択</p>
                                         </div>
-                                        {/* Excel */}
                                         <button
                                             onClick={() => { exportExcel(); setShowExportMenu(false); }}
                                             className="w-full text-left px-4 py-3 hover:bg-emerald-50 flex items-start gap-3 border-b border-slate-100"
@@ -1374,10 +1558,9 @@
                                             <span className="text-xl mt-0.5">📊</span>
                                             <div>
                                                 <div className="font-black text-sm text-slate-800">Excel (.xlsx)</div>
-                                                <div className="text-xs text-slate-500 font-bold">全件 · 再インポート対応</div>
+                                                <div className="text-xs text-slate-500 font-bold">表示中のナレッジをエクスポート</div>
                                             </div>
                                         </button>
-                                        {/* PDF 全件 */}
                                         <button
                                             onClick={() => {
                                                 const all = [...knowledges.public, ...knowledges.school, ...knowledges.private];
@@ -1393,7 +1576,6 @@
                                                 <div className="text-xs text-slate-500 font-bold">表紙付き一括出力 ({[...knowledges.public, ...knowledges.school, ...knowledges.private].length}件)</div>
                                             </div>
                                         </button>
-                                        {/* PDF フィルター済み */}
                                         <button
                                             onClick={() => {
                                                 if (displayedItems.length === 0) { alert('表示中のナレッジがありません'); return; }
@@ -1415,7 +1597,7 @@
                         
                         <div className="flex gap-2 w-full sm:w-auto flex-col sm:flex-row">
                             <input type="file" accept="application/pdf" ref={pdfInputRef} onChange={handlePdfUpload} className="hidden" />
-                            <button onClick={() => pdfInputRef.current.click()} className="bg-purple-600 text-white font-black px-6 py-3.5 rounded-2xl shadow-lg hover:bg-purple-700 transition hover:-translate-y-0.5">
+                            <button onClick={() => pdfInputRef.current.click()} disabled={aiLimitReached} className="bg-purple-600 text-white font-black px-6 py-3.5 rounded-2xl shadow-lg hover:bg-purple-700 transition hover:-translate-y-0.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0">
                                 📄 PDFから自動生成
                             </button>
                             <button onClick={() => { setFormData({ visibility: 'public', title: '', category: categories[0], timing: timings[0], stakeholders: '', fileLocation: '', content: '', needsAttention: false, selectedTags: [] }); setItemModal({ isOpen: true, itemId: null }); }} className="bg-emerald-600 text-white font-black px-6 py-3.5 rounded-2xl w-full sm:w-auto shadow-lg hover:-translate-y-0.5">
@@ -1430,8 +1612,17 @@
                         <select value={filterTiming} onChange={e=>setFilterTiming(e.target.value)} className="p-3 border-2 rounded-xl font-bold bg-slate-50"><option value="">全時期</option>{timings.map(t=><option key={t}>{t}</option>)}</select>
                         <select value={filterTag} onChange={e=>setFilterTag(e.target.value)} className="p-3 border-2 rounded-xl font-bold bg-slate-50"><option value="">全タグ</option>{tagsMaster.map(t=><option key={t}>{t}</option>)}</select>
                     </div>
-                    <div className="flex items-center mt-3 print-hidden">
+                    <div className="flex items-center justify-between mt-3 print-hidden">
                         <label className="flex items-center cursor-pointer text-sm font-bold text-slate-600 bg-amber-50 px-4 py-2 rounded-xl border border-amber-200"><input type="checkbox" checked={filterAttentionOnly} onChange={(e) => setFilterAttentionOnly(e.target.checked)} className="mr-2 w-4 h-4 accent-amber-500" />⚠️ 要確認・変更あり のみ表示</label>
+                        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border ${aiLimitReached ? 'bg-red-50 border-red-300 text-red-600' : aiNearLimit ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-slate-100 border-slate-200 text-slate-500'}`}>
+                            <span>🤖 本日のAI利用</span>
+                            <span className="font-black">{aiUsageCount} / {aiDailyLimit} 回</span>
+                            <div className="w-16 h-1.5 bg-white rounded-full overflow-hidden border border-current/20">
+                                <div className={`h-full rounded-full ${aiLimitReached ? 'bg-red-500' : aiNearLimit ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{width:`${Math.min(100,aiUsageRate*100)}%`}} />
+                            </div>
+                            {aiLimitReached && <span>⛔ 上限到達</span>}
+                            {aiNearLimit && <span>⚠️ まもなく上限</span>}
+                        </div>
                     </div>
 
                     <div className="grid gap-4">
@@ -1439,7 +1630,16 @@
                         {displayedItems.map(item => {
                             const vis = VIS_CONF[item.visibility || 'public'];
                             const safeContent = toSafeString(item.content);
-                            const safeTags = Array.isArray(item.selectedTags) ? item.selectedTags : [];
+                            const safeTags = Array.isArray(item.selectedTags) ? [...item.selectedTags].sort((a,b)=>{
+                                const idxA = tagsMaster.indexOf(a); const idxB = tagsMaster.indexOf(b);
+                                return (idxA!==-1?idxA:999) - (idxB!==-1?idxB:999);
+                            }) : [];
+                            
+                            const selSources = Array.isArray(item.selectedSources) ? [...item.selectedSources].sort((a,b)=>{
+                                const idxA = sourcesMaster.indexOf(a); const idxB = sourcesMaster.indexOf(b);
+                                return (idxA!==-1?idxA:999) - (idxB!==-1?idxB:999);
+                            }) : [];
+                            
                             const isConfirming = deleteConfirm?.itemId === item.id;
                             const keyword = getDeleteKeyword(item.title);
                             const canDelete = isConfirming && deleteConfirm.inputValue === keyword;
@@ -1456,17 +1656,15 @@
                                             <h3 className="text-xl font-black">{item.title}</h3>
                                         </div>
                                         <div className="flex flex-wrap gap-2 shrink-0 print-hidden">
-                                            <button onClick={() => handleAISummary(item)} className="px-3 py-1.5 text-xs font-bold bg-purple-100 text-purple-700 hover:bg-purple-200 rounded border border-purple-200 shadow-sm" title="AIが3行で解説">🤖 AI要約</button>
                                             <button onClick={() => handleDuplicate(item)} className="px-3 py-1.5 text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 rounded" title="自分用に複製して編集">📋 複製</button>
                                             <button onClick={() => onPrint(item)} className="px-3 py-1.5 text-xs font-bold bg-blue-50 text-blue-600 rounded border border-blue-200">🖨️ 印刷</button>
                                             <button onClick={() => {
                                                 const itemData = {...item, originalVisibility: item.visibility||'public'};
                                                 setFormData(itemData);
-                                                setEditOrigin({...item}); // 編集前の状態を保存
+                                                setEditOrigin({...item});
                                                 setShowSaveConfirm(false);
                                                 setItemModal({isOpen:true, itemId:item.id});
                                             }} className="px-3 py-1.5 text-xs font-bold bg-slate-100 rounded">✏️</button>
-                                            {/* ★ 削除ボタン: 確認中は「キャンセル」に変化 */}
                                             {isConfirming
                                                 ? <button onClick={cancelDeleteConfirm} className="px-3 py-1.5 text-xs font-bold bg-slate-200 text-slate-600 hover:bg-slate-300 rounded border border-slate-300">✕ キャンセル</button>
                                                 : <button onClick={() => startDeleteConfirm(item)} className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-400 hover:bg-red-100 hover:text-red-600 rounded border border-red-200" title="削除">🗑️ 削除</button>
@@ -1474,14 +1672,33 @@
                                         </div>
                                     </div>
                                     <div className="bg-slate-50 p-4 rounded-xl text-sm whitespace-pre-wrap mb-4">{safeContent}</div>
+                                    {selSources.length > 0 && (
+                                        <div className="text-xs text-blue-700 font-bold mt-1 mb-1 flex flex-wrap gap-1 items-center">
+                                            <span>📜 根拠・出典:</span>
+                                            {selSources.map(s => <span key={s} className="bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">{s}</span>)}
+                                        </div>
+                                    )}
+                                    {selSources.length === 0 && item.source && (
+                                        <div className="text-xs text-blue-700 font-bold mt-1 mb-1">📜 根拠・出典: {toSafeString(item.source)}</div>
+                                    )}
                                     {item.stakeholders && (
                                         <div className="text-xs text-slate-500 font-bold mt-2">📞 {toSafeString(item.stakeholders)}</div>
                                     )}
                                     {item.fileLocation && (
                                         <div className="text-xs text-emerald-600 font-bold mt-1">📁 {toSafeString(item.fileLocation)}</div>
                                     )}
+                                    <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100">
+                                        <span className="text-[11px] text-slate-400 font-bold">
+                                            {item.updatedAt ? `最終更新: ${item.updatedAt?.toDate?.()?.toLocaleString?.('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) || ''}` : ''}
+                                        </span>
+                                        <button onClick={async () => {
+                                            const snap = await db.collection(`cities/${cityId}/knowledge_history`).where('targetId','==',item.id).limit(20).get();
+                                            const histItems = snap.docs.map(d => ({...d.data(), id: d.id}));
+                                            histItems.sort((a, b) => (b.operationDate?.seconds || 0) - (a.operationDate?.seconds || 0));
+                                            setHistoryModal({ isOpen: true, itemTitle: item.title, items: histItems });
+                                        }} className="text-[11px] text-slate-400 hover:text-slate-600 font-bold underline print-hidden">📋 変更履歴</button>
+                                    </div>
 
-                                    {/* ★ インライン削除確認パネル */}
                                     {isConfirming && (
                                         <div className="mt-4 p-4 bg-red-50 border-2 border-red-200 rounded-2xl animate-pulse-once">
                                             <div className="flex items-center gap-2 mb-3">
@@ -1516,34 +1733,35 @@
                         })}
                     </div>
 
-                    <AISummaryModal summaryConfig={summaryConfig} onClose={() => setSummaryConfig({isOpen: false})} />
-
                     {itemModal.isOpen && (() => {
                         const isEditing = !!itemModal.itemId;
 
-                        // 変更差分を計算するヘルパー
                         const getDiff = () => {
                             if (!isEditing || !editOrigin) return [];
                             const fields = [
-                                { key: 'title',        label: 'タイトル',       fmt: v => toSafeString(v) },
-                                { key: 'visibility',   label: '公開範囲',       fmt: v => VIS_CONF[v||'public']?.label || v },
-                                { key: 'category',     label: '分野',           fmt: v => v || '(未設定)' },
-                                { key: 'timing',       label: '時期',           fmt: v => v || '(未設定)' },
-                                { key: 'stakeholders', label: '関係先・連絡先', fmt: v => toSafeString(v) || '(未設定)' },
-                                { key: 'fileLocation', label: 'ファイル場所',   fmt: v => toSafeString(v) || '(未設定)' },
-                                { key: 'selectedTags', label: 'タグ',           fmt: v => (Array.isArray(v) && v.length > 0) ? v.join(', ') : '(なし)' },
-                                { key: 'content',      label: '手順・内容',     fmt: v => { const s = toSafeString(v); return s.length > 80 ? s.slice(0, 80) + '…' : (s || '(未設定)'); } },
+                                { key: 'title',        label: 'タイトル',       fmt: (v) => toSafeString(v) },
+                                { key: 'visibility',   label: '公開範囲',       fmt: (v) => VIS_CONF[v||'public']?.label || v },
+                                { key: 'category',     label: '分野',           fmt: (v) => v || '(未設定)' },
+                                { key: 'timing',       label: '時期',           fmt: (v) => v || '(未設定)' },
+                                { key: 'stakeholders', label: '関係先・連絡先', fmt: (v) => toSafeString(v) || '(未設定)' },
+                                { key: 'fileLocation', label: 'ファイル場所',   fmt: (v) => toSafeString(v) || '(未設定)' },
+                                { key: 'selectedTags', label: 'タグ',           fmt: (v) => (Array.isArray(v) && v.length > 0) ? v.join(', ') : '(なし)' },
+                                { key: 'selectedSources', label: '根拠・出典',   fmt: (v, obj) => {
+                                    const arr = Array.isArray(v) ? v : [];
+                                    if (arr.length === 0 && obj && obj.source) return toSafeString(obj.source);
+                                    return arr.length > 0 ? arr.join(', ') : '(なし)';
+                                } },
+                                { key: 'content',      label: '手順・内容',     fmt: (v) => { const s = toSafeString(v); return s.length > 80 ? s.slice(0, 80) + '…' : (s || '(未設定)'); } },
                             ];
                             return fields.map(f => {
-                                const before = f.fmt(editOrigin[f.key]);
-                                const after  = f.fmt(formData[f.key]);
+                                const before = f.fmt(editOrigin[f.key], editOrigin);
+                                const after  = f.fmt(formData[f.key], formData);
                                 return { ...f, before, after, changed: before !== after };
                             });
                         };
 
-                        // 実際にFirestoreへ保存する処理
                         const commitSave = () => {
-                            const p = {...formData, content: toSafeString(formData.content), updatedAt: firebase.firestore.FieldValue.serverTimestamp()};
+                            const p = {...formData, content: toSafeString(formData.content), selectedSources: Array.isArray(formData.selectedSources) ? formData.selectedSources : [], updatedAt: firebase.firestore.FieldValue.serverTimestamp()};
                             const o = formData.originalVisibility || 'public', n = formData.visibility;
                             delete p.originalVisibility;
                             if (isEditing) {
@@ -1553,22 +1771,24 @@
                                 } else {
                                     db.collection(getColPath(cityId,schoolId,userId,'knowledge',n)).doc(itemModal.itemId).update(p);
                                 }
+                                recordHistory(itemModal.itemId, '更新');
                             } else {
                                 p.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-                                db.collection(getColPath(cityId,schoolId,userId,'knowledge',n)).add(p);
+                                db.collection(getColPath(cityId,schoolId,userId,'knowledge',n)).add(p).then(ref => {
+                                    recordHistory(ref.id, '新規作成');
+                                });
                             }
                             setItemModal({isOpen:false, itemId:null});
                             setShowSaveConfirm(false);
                             setEditOrigin(null);
                         };
 
-                        // 保存ボタン押下: 編集なら差分確認ステップへ / 新規ならそのまま保存
                         const handleSubmit = (e) => {
                             e.preventDefault();
                             if (isEditing) {
-                                setShowSaveConfirm(true); // 確認ステップを表示
+                                setShowSaveConfirm(true);
                             } else {
-                                commitSave(); // 新規はそのまま保存
+                                commitSave();
                             }
                         };
 
@@ -1579,7 +1799,6 @@
                         <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center p-4 z-50 overflow-y-auto print-hidden">
                             <div className={`bg-white rounded-3xl w-full max-w-2xl p-8 my-8 transition-all ${showSaveConfirm ? 'border-t-8 border-amber-500' : 'border-t-8 border-emerald-600'}`}>
 
-                                {/* ===== 通常の編集フォーム ===== */}
                                 {!showSaveConfirm && (
                                 <>
                                 <h2 className="text-2xl font-black mb-6">{isEditing ? '✏️ 編集' : '✨ 新規作成'}</h2>
@@ -1590,8 +1809,8 @@
                                     <div>
                                         <div className="flex justify-between items-end mb-1">
                                             <label className="text-sm font-bold text-slate-500">手順・内容</label>
-                                            <button type="button" onClick={handleAIAssist} disabled={isAILoading} className="text-xs font-bold bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-200 shadow-sm transition">
-                                                {isAILoading ? '⏳ AIが思考中...' : '✨ AIで文章整理 ＆ 自動分類'}
+                                            <button type="button" onClick={handleAIAssist} disabled={isAILoading || aiLimitReached} className="text-xs font-bold bg-blue-100 text-blue-700 px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-200 shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
+                                                {isAILoading ? '⏳ AIが思考中...' : aiLimitReached ? '⛔ AI上限到達' : '✨ AIで文章整理 ＆ 自動分類'}
                                             </button>
                                         </div>
                                         <textarea value={toSafeString(formData.content)} onChange={e=>setFormData({...formData,content:e.target.value})} placeholder="思いついたままベタ打ちして、AIボタンを押してみてください..." className="w-full p-4 border-2 rounded-xl h-48"></textarea>
@@ -1610,6 +1829,30 @@
                                         </div>
                                         <div><label className="text-sm font-bold text-slate-500 block mb-1">ファイル保管場所</label><input value={toSafeString(formData.fileLocation)} onChange={e=>setFormData({...formData,fileLocation:e.target.value})} placeholder="共有フォルダ等のパス" className="w-full p-3 border-2 rounded-xl text-emerald-600 outline-none" /></div>
                                     </div>
+                                    <div>
+                                        <label className="text-sm font-bold text-slate-500 block mb-1">📜 根拠・出典（複数選択可）</label>
+                                        <div className="p-3 border-2 border-dashed rounded-xl bg-slate-50">
+                                            <div className="flex justify-between mb-2">
+                                                <span className="text-xs text-slate-400 font-bold">該当するものをすべて選択してください</span>
+                                                <button type="button" onClick={()=>setShowSourceModal(true)} className="text-sm text-emerald-600 font-bold">⚙️ 編集</button>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                {sourcesMaster.map(s => {
+                                                    const sel = Array.isArray(formData.selectedSources) ? formData.selectedSources : [];
+                                                    const isSelected = sel.includes(s);
+                                                    return (
+                                                        <button type="button" key={s} onClick={()=>{
+                                                            const cur = Array.isArray(formData.selectedSources) ? formData.selectedSources : [];
+                                                            setFormData({...formData, selectedSources: isSelected ? cur.filter(x=>x!==s) : [...cur, s]});
+                                                        }} className={`px-2 py-1 rounded text-xs font-bold border ${isSelected ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-slate-500 border-slate-300'}`}>
+                                                            {s}
+                                                        </button>
+                                                    );
+                                                })}
+                                                {sourcesMaster.length === 0 && <span className="text-xs text-slate-400">⚙️ からマスターを追加してください</span>}
+                                            </div>
+                                        </div>
+                                    </div>
                                     <div className="flex gap-4 pt-4 border-t">
                                         <button type="button" onClick={()=>{setItemModal({isOpen:false});setEditOrigin(null);setShowSaveConfirm(false);}} className="flex-1 p-3 bg-slate-100 rounded-xl font-bold">キャンセル</button>
                                         <button type="submit" className="flex-1 p-3 bg-emerald-600 text-white rounded-xl font-bold">
@@ -1620,7 +1863,6 @@
                                 </>
                                 )}
 
-                                {/* ===== 変更確認ステップ (編集時のみ) ===== */}
                                 {showSaveConfirm && (
                                 <div>
                                     <div className="flex items-center gap-3 mb-2">
@@ -1692,17 +1934,50 @@
                         </div>
                         );
                     })()}
-                    {showCatModal && <SettingModal title="分野" items={categories} newItem={newCat} setNewItem={setNewCat} onAdd={()=>{if(newCat.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({list:[...new Set([...categories,newCat.trim()])]},{merge:true});setNewCat('');}} onRemove={c=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({list:categories.filter(x=>x!==c)},{merge:true});}} onClose={()=>setShowCatModal(false)} />}
-                    {showTimeModal && <SettingModal title="時期" items={timings} newItem={newTime} setNewItem={setNewTime} onAdd={()=>{if(newTime.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({list:[...new Set([...timings,newTime.trim()])]},{merge:true});setNewTime('');}} onRemove={t=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({list:timings.filter(x=>x!==t)},{merge:true});}} onClose={()=>setShowTimeModal(false)} />}
-                    {showTagModal && <SettingModal title="タグ" items={tagsMaster} newItem={newTag} setNewItem={setNewTag} onAdd={()=>{if(newTag.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({list:[...new Set([...tagsMaster,newTag.trim()])]},{merge:true});setNewTag('');}} onRemove={t=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({list:tagsMaster.filter(x=>x!==t)},{merge:true});}} onClose={()=>setShowTagModal(false)} />}
-                    {showStakeholderModal && <SettingModal title="関係先・連絡先" items={stakeholdersList} newItem={newStakeholder} setNewItem={setNewStakeholder} onAdd={()=>{if(newStakeholder.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({list:[...new Set([...stakeholdersList,newStakeholder.trim()])]},{merge:true});setNewStakeholder('');}} onRemove={s=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({list:stakeholdersList.filter(x=>x!==s)},{merge:true});}} onClose={()=>setShowStakeholderModal(false)} />}
+                    {showCatModal && <SettingModal title="分野" items={categories} newItem={newCat} setNewItem={setNewCat} onAdd={()=>{if(newCat.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({list:[...new Set([...categories,newCat.trim()])]},{merge:true});setNewCat('');}} onRemove={c=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_categories').set({list:categories.filter(x=>x!==c)},{merge:true});}} onEdit={handleEditCategory} onReorder={handleReorderCategory} onClose={()=>setShowCatModal(false)} />}
+                    {showTimeModal && <SettingModal title="時期" items={timings} newItem={newTime} setNewItem={setNewTime} onAdd={()=>{if(newTime.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({list:[...new Set([...timings,newTime.trim()])]},{merge:true});setNewTime('');}} onRemove={t=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_timings').set({list:timings.filter(x=>x!==t)},{merge:true});}} onEdit={handleEditTiming} onReorder={handleReorderTiming} onClose={()=>setShowTimeModal(false)} />}
+                    {showTagModal && <SettingModal title="タグ" items={tagsMaster} newItem={newTag} setNewItem={setNewTag} onAdd={()=>{if(newTag.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({list:[...new Set([...tagsMaster,newTag.trim()])]},{merge:true});setNewTag('');}} onRemove={t=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_tags').set({list:tagsMaster.filter(x=>x!==t)},{merge:true});}} onEdit={handleEditTag} onReorder={handleReorderTag} onClose={()=>setShowTagModal(false)} />}
+                    {showStakeholderModal && <SettingModal title="関係先・連絡先" items={stakeholdersList} newItem={newStakeholder} setNewItem={setNewStakeholder} onAdd={()=>{if(newStakeholder.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({list:[...new Set([...stakeholdersList,newStakeholder.trim()])]},{merge:true});setNewStakeholder('');}} onRemove={s=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_stakeholders').set({list:stakeholdersList.filter(x=>x!==s)},{merge:true});}} onEdit={handleEditStakeholder} onReorder={handleReorderStakeholder} onClose={()=>setShowStakeholderModal(false)} />}
+                    {showSourceModal && <SettingModal title="根拠・出典" items={sourcesMaster} newItem={newSource} setNewItem={setNewSource} onAdd={()=>{if(newSource.trim())db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({list:[...new Set([...sourcesMaster,newSource.trim()])]},{merge:true});setNewSource('');}} onRemove={s=>{if(window.confirm('削除しますか？'))db.collection(`cities/${cityId}/settings`).doc('knowledge_sources').set({list:sourcesMaster.filter(x=>x!==s)},{merge:true});}} onEdit={handleEditSource} onReorder={handleReorderSource} onClose={()=>setShowSourceModal(false)} />}
+                    
+                    {historyModal.isOpen && (
+                        <div className="fixed inset-0 bg-slate-900/70 flex items-center justify-center p-4 z-50 print-hidden">
+                            <div className="bg-white rounded-3xl w-full max-w-lg p-6 border-t-8 border-slate-500 shadow-2xl max-h-[80vh] flex flex-col">
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="font-black text-lg">📋 変更履歴</h3>
+                                        <p className="text-xs text-slate-500 font-bold mt-0.5 truncate max-w-xs">{historyModal.itemTitle}</p>
+                                    </div>
+                                    <button onClick={()=>setHistoryModal({isOpen:false,itemTitle:'',items:[]})} className="text-slate-400 hover:text-slate-600 font-black text-xl">✕</button>
+                                </div>
+                                <div className="overflow-y-auto flex-1">
+                                    {historyModal.items.length === 0 ? (
+                                        <div className="text-center py-10 text-slate-400 font-bold">履歴がありません</div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            {historyModal.items.map((h, i) => {
+                                                const date = h.operationDate?.toDate?.()?.toLocaleString?.('ja-JP', {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) || '';
+                                                const typeColor = h.operationType === '新規作成' ? 'bg-emerald-100 text-emerald-700' : h.operationType === '削除' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+                                                return (
+                                                    <div key={i} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                                        <span className={`text-xs font-black px-2 py-1 rounded ${typeColor} shrink-0`}>{h.operationType}</span>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-black text-slate-700 truncate">{h.schoolName} / {h.userName}</p>
+                                                            <p className="text-xs text-slate-400 font-bold">{date}</p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
 
-        // ==========================================
-        // App全体
-        // ==========================================
         function App() {
             const [cityId, setCityId] = useState(localStorage.getItem('hn_cityId') || '');
             const [schoolId, setSchoolId] = useState(localStorage.getItem('hn_schoolId') || '');
