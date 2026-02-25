@@ -89,12 +89,12 @@
     <div class="calc-section">
         <label>休憩パターンの選択</label>
         <div class="radio-group">
-            <input type="radio" id="p_a" name="pattern" value="a" class="radio-input" checked=""><label for="p_a" class="radio-label" id="label_a">A</label>
-            <input type="radio" id="p_b" name="pattern" value="b" class="radio-input"><label for="p_b" class="radio-label" id="label_b">B</label>
-            <input type="radio" id="p_c" name="pattern" value="c" class="radio-input"><label for="p_c" class="radio-label" id="label_c">C</label>
-            <input type="radio" id="p_d" name="pattern" value="d" class="radio-input"><label for="p_d" class="radio-label" id="label_d">D</label>
+            <input type="radio" id="p_a" name="pattern" value="a" class="radio-input" checked=""><label for="p_a" class="radio-label" id="label_a">A日課：月火木金</label>
+            <input type="radio" id="p_b" name="pattern" value="b" class="radio-input"><label for="p_b" class="radio-label" id="label_b">A日課：水</label>
+            <input type="radio" id="p_c" name="pattern" value="c" class="radio-input"><label for="p_c" class="radio-label" id="label_c">B日課</label>
+            <input type="radio" id="p_d" name="pattern" value="d" class="radio-input"><label for="p_d" class="radio-label" id="label_d">長期休業等</label>
         </div>
-        <div id="currentPatternInfo" style="border-color: rgb(155, 89, 182); color: rgb(155, 89, 182); background-color: rgb(245, 238, 248);">休憩：12:00~12:45</div>
+        <div id="currentPatternInfo" style="border-color: rgb(230, 126, 34); color: rgb(230, 126, 34); background-color: rgb(253, 242, 233);">休憩：10:20~10:40 / 13:05~13:30</div>
     </div>
 
     <div id="tab-calc" class="tab-content active">
@@ -182,7 +182,7 @@
         "workEnd": "16:45",
         "patterns": {
             "a": {
-                "name": "A",
+                "name": "A日課：月火木金",
                 "split": true,
                 "t1s": "10:20",
                 "t1e": "10:40",
@@ -190,7 +190,7 @@
                 "t2e": "13:30"
             },
             "b": {
-                "name": "B",
+                "name": "A日課：水",
                 "split": true,
                 "t1s": "10:20",
                 "t1e": "10:40",
@@ -198,7 +198,7 @@
                 "t2e": "15:45"
             },
             "c": {
-                "name": "C",
+                "name": "B日課",
                 "split": true,
                 "t1s": "12:40",
                 "t1e": "13:00",
@@ -206,7 +206,7 @@
                 "t2e": "14:45"
             },
             "d": {
-                "name": "D",
+                "name": "長期休業等",
                 "split": false,
                 "t1s": "12:00",
                 "t1e": "12:45"
