@@ -4,7 +4,7 @@
     <meta name="robots" content="noindex, nofollow">    <meta charset="UTF-8">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>SmartStocker 2.0</title>
+    <title>SmartStocker 1.5</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -32,13 +32,13 @@
             firebase.initializeApp(firebaseConfig);
         }
         const db = firebase.firestore();
-        const { useState, useEffect, useMemo, useRef } = React;
+        const { useState, useEffect, useMemo } = React;
 
         const defaultCategories = ['事務用品', '日用品・清掃', 'トナー・インク', '用紙', 'その他'];
         const defaultUnits = ['個', '本', '箱', '冊', '包', '枚', 'セット'];
         const defaultTags = ['よく出る', '要発注', '発注済', '高額品'];
+        const defaultVendors = ['アスクル', 'カウネット', 'Amazon', '地元業者', 'その他'];
 
-        // ★ バーコードスキャナーコンポーネント
         function BarcodeScanner({ onScan, onClose }) {
             useEffect(() => {
                 const html5QrCode = new Html5Qrcode("reader");
@@ -82,27 +82,28 @@
             const [categories, setCategories] = useState(defaultCategories);
             const [units, setUnits] = useState(defaultUnits);
             const [tagsMaster, setTagsMaster] = useState(defaultTags);
+            const [vendors, setVendors] = useState(defaultVendors); 
             const [errorMsg, setErrorMsg] = useState('');
 
-            // 検索・並び替えステート
             const [searchQuery, setSearchQuery] = useState('');
             const [filterCategory, setFilterCategory] = useState('');
             const [filterTag, setFilterTag] = useState('');
-            const [sortBy, setSortBy] = useState('category'); // category, tag, name
+            const [filterLowStock, setFilterLowStock] = useState(false); 
+            const [sortBy, setSortBy] = useState('category'); 
 
             const [showCategoryModal, setShowCategoryModal] = useState(false);
             const [showUnitModal, setShowUnitModal] = useState(false);
             const [showTagModal, setShowTagModal] = useState(false);
+            const [showVendorModal, setShowVendorModal] = useState(false); 
             
             const [newItemInput, setNewItemInput] = useState(''); 
 
             const [itemModal, setItemModal] = useState({ isOpen: false, mode: 'add', itemId: null });
             const [formData, setFormData] = useState({
                 name: '', category: '', unit: '', defaultStock: 0, currentStock: 0, 
-                orderThreshold: 0, barcode: '', selectedTags: []
+                orderThreshold: 0, barcode: '', selectedTags: [], vendor: '', itemCode: '' 
             });
 
-            // スキャナー用ステート ('search' または 'register' または null)
             const [scanMode, setScanMode] = useState(null);
 
             useEffect(() => {
@@ -123,20 +124,22 @@
                 const unsubCat = getMaster('categories', setCategories, defaultCategories);
                 const unsubUnit = getMaster('units', setUnits, defaultUnits);
                 const unsubTag = getMaster('tags_master', setTagsMaster, defaultTags);
+                const unsubVendor = getMaster('vendors', setVendors, defaultVendors); 
 
-                return () => { unsubItems(); unsubCat(); unsubUnit(); unsubTag(); };
+                return () => { unsubItems(); unsubCat(); unsubUnit(); unsubTag(); unsubVendor(); };
             }, [isLoggedIn, groupId]);
 
-            // ★ マスター連動の並び替えロジック
             const displayedItems = useMemo(() => {
                 let filtered = items;
+                if (filterLowStock) filtered = filtered.filter(item => item.currentStock <= item.orderThreshold);
                 if (filterCategory) filtered = filtered.filter(item => item.category === filterCategory);
                 if (filterTag) filtered = filtered.filter(item => item.selectedTags && item.selectedTags.includes(filterTag));
                 if (searchQuery) {
                     const q = searchQuery.toLowerCase();
                     filtered = filtered.filter(item => 
                         (item.name && item.name.toLowerCase().includes(q)) || 
-                        (item.barcode && item.barcode.includes(q))
+                        (item.barcode && item.barcode.includes(q)) ||
+                        (item.itemCode && item.itemCode.toLowerCase().includes(q)) 
                     );
                 }
 
@@ -153,10 +156,16 @@
                         const orderA = idxA === -1 ? 999 : idxA;
                         const orderB = idxB === -1 ? 999 : idxB;
                         if (orderA !== orderB) return orderA - orderB;
+                    } else if (sortBy === 'vendor') { 
+                        const idxA = vendors.indexOf(a.vendor);
+                        const idxB = vendors.indexOf(b.vendor);
+                        const orderA = idxA === -1 ? 999 : idxA; 
+                        const orderB = idxB === -1 ? 999 : idxB;
+                        if (orderA !== orderB) return orderA - orderB;
                     }
                     return (a.name || '').localeCompare(b.name || '');
                 });
-            }, [items, filterCategory, filterTag, searchQuery, sortBy, categories, tagsMaster]);
+            }, [items, filterLowStock, filterCategory, filterTag, searchQuery, sortBy, categories, tagsMaster, vendors]);
 
             const handleLogin = (e) => {
                 e.preventDefault();
@@ -165,12 +174,22 @@
             };
 
             const openAddModal = () => {
-                setFormData({ name: '', category: categories[0] || '', unit: units[0] || '', defaultStock: 0, currentStock: 0, orderThreshold: 0, barcode: '', selectedTags: [] });
+                setFormData({ 
+                    name: '', category: categories[0] || '', unit: units[0] || '', 
+                    defaultStock: 0, currentStock: 0, orderThreshold: 0, 
+                    barcode: '', selectedTags: [], vendor: '', itemCode: '' 
+                });
                 setItemModal({ isOpen: true, mode: 'add', itemId: null });
             };
 
             const openEditModal = (item) => {
-                setFormData({ ...item, selectedTags: item.selectedTags || [], barcode: item.barcode || '' });
+                setFormData({ 
+                    ...item, 
+                    selectedTags: item.selectedTags || [], 
+                    barcode: item.barcode || '',
+                    vendor: item.vendor || '',
+                    itemCode: item.itemCode || ''
+                });
                 setItemModal({ isOpen: true, mode: 'edit', itemId: item.id });
             };
 
@@ -197,7 +216,6 @@
                 }));
             };
 
-            // ★ マスター配列の順序入れ替え処理
             const moveItemInArray = (list, index, direction, docName) => {
                 const newList = [...list];
                 if (direction === 'up' && index > 0) {
@@ -209,7 +227,7 @@
                 db.collection(`groups/${groupId}/settings`).doc(docName).set({ list: newList }, { merge: true });
             };
 
-            const handleMasterAdd = (list, setter, docName) => {
+            const handleMasterAdd = (list, docName) => {
                 const t = newItemInput.trim();
                 if(!t) return;
                 const updatedList = [...new Set([...list, t])];
@@ -222,7 +240,6 @@
                 }
             };
 
-            // バーコードスキャン結果処理
             const handleScan = (text) => {
                 if (scanMode === 'search') {
                     setSearchQuery(text);
@@ -236,7 +253,9 @@
                 return (
                     <div className="flex items-center justify-center h-screen p-4">
                         <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-sm border border-blue-100">
-                            <h1 className="text-2xl sm:text-3xl font-black text-blue-600 mb-2 tracking-tight">SmartStocker 2.0</h1>
+                            <h1 className="text-2xl sm:text-3xl font-black text-blue-600 mb-2 tracking-tight">
+                                SmartStocker <span className="text-lg text-blue-400">1.5</span>
+                            </h1>
                             <form onSubmit={handleLogin} className="space-y-4 mt-6">
                                 <input name="groupInput" type="text" placeholder="職場IDを入力" className="w-full p-3 border-2 border-slate-200 rounded-xl font-bold focus:border-blue-500 outline-none" required />
                                 <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700">入室する</button>
@@ -246,14 +265,13 @@
                 );
             }
 
-            // スマホ最適化のための共通マスター管理モーダルUI
             const renderMasterModal = (title, list, docName, closeFunc) => (
                 <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-4 sm:p-6">
                         <h3 className="font-black text-base text-slate-800 mb-4">{title}のカスタマイズ</h3>
                         <div className="flex gap-2 mb-4">
                             <input value={newItemInput} onChange={e => setNewItemInput(e.target.value)} placeholder="新しい項目" className="flex-1 p-2 border-2 border-slate-200 rounded-lg font-bold text-sm outline-none" />
-                            <button onClick={() => handleMasterAdd(list, null, docName)} className="bg-blue-600 text-white px-3 text-sm rounded-lg font-bold">追加</button>
+                            <button onClick={() => handleMasterAdd(list, docName)} className="bg-blue-600 text-white px-3 text-sm rounded-lg font-bold">追加</button>
                         </div>
                         <ul className="space-y-2 max-h-60 overflow-y-auto mb-4 pr-1">
                             {list.map((item, idx) => (
@@ -276,17 +294,22 @@
                 <div className="max-w-4xl mx-auto p-2 sm:p-6 pb-24">
                     {scanMode && <BarcodeScanner onScan={handleScan} onClose={() => setScanMode(null)} />}
 
+                    {/* ★ ヘッダー部分を修正: バージョン情報と新規登録ボタンの追加 */}
                     <header className="flex justify-between items-center mb-4 bg-white p-3 sm:p-4 rounded-xl shadow-sm border border-slate-100">
                         <div>
-                            <h1 className="text-xl sm:text-2xl font-black text-blue-700 tracking-tight leading-none">SmartStocker 2.0</h1>
+                            <h1 className="text-xl sm:text-2xl font-black text-blue-700 tracking-tight leading-none flex items-baseline gap-1">
+                                SmartStocker <span className="text-sm font-bold text-blue-400">1.5</span>
+                            </h1>
                             <p className="text-[10px] sm:text-xs font-bold text-blue-400 mt-1">ID: {groupId}</p>
                         </div>
-                        <button onClick={() => {localStorage.removeItem('smartstocker_group'); setIsLoggedIn(false);}} className="text-xs font-bold text-slate-400 px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">退出</button>
+                        <div className="flex items-center gap-1.5 sm:gap-2">
+                            <button onClick={openAddModal} className="text-[10px] sm:text-xs font-bold bg-blue-600 text-white px-2 sm:px-3 py-1.5 rounded-lg hover:bg-blue-700 shadow-sm transition">＋ 新規登録</button>
+                            <button onClick={() => {localStorage.removeItem('smartstocker_group'); setIsLoggedIn(false);}} className="text-[10px] sm:text-xs font-bold text-slate-500 px-2 sm:px-3 py-1.5 bg-slate-100 rounded-lg border border-slate-200 hover:bg-slate-200 transition">退出</button>
+                        </div>
                     </header>
 
-                    {/* ★ 検索・並び替えエリア (スマホ最適化) */}
                     <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-100 mb-4 space-y-2">
-                        <div className="flex gap-2">
+                        <div className="flex flex-col sm:flex-row gap-2">
                             <div className="flex-1 relative flex">
                                 <span className="absolute left-3 top-2.5 text-slate-400 text-sm">🔍</span>
                                 <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="品名・バーコード" className="w-full pl-8 p-2 border-2 border-slate-200 rounded-l-xl text-sm font-bold outline-none focus:border-blue-500" />
@@ -294,30 +317,38 @@
                                     📷 <span className="hidden sm:inline text-xs">スキャン</span>
                                 </button>
                             </div>
+                            <label className="flex items-center justify-center cursor-pointer text-xs font-bold text-red-600 bg-red-50 px-3 py-2 rounded-xl border border-red-200 hover:bg-red-100 transition">
+                                <input type="checkbox" checked={filterLowStock} onChange={(e) => setFilterLowStock(e.target.checked)} className="mr-2 w-4 h-4 accent-red-500" />
+                                ⚠️ 要発注のみ表示
+                            </label>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="flex-1 min-w-[100px] p-2 border-2 border-slate-200 rounded-lg text-xs font-bold bg-slate-50 outline-none">
+                            <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="flex-1 min-w-[90px] p-2 border-2 border-slate-200 rounded-lg text-xs font-bold bg-slate-50 outline-none">
                                 <option value="">全分野</option>
                                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
-                            <select value={filterTag} onChange={(e) => setFilterTag(e.target.value)} className="flex-1 min-w-[100px] p-2 border-2 border-slate-200 rounded-lg text-xs font-bold bg-slate-50 outline-none">
+                            <select value={filterTag} onChange={(e) => setFilterTag(e.target.value)} className="flex-1 min-w-[90px] p-2 border-2 border-slate-200 rounded-lg text-xs font-bold bg-slate-50 outline-none">
                                 <option value="">全タグ</option>
                                 {tagsMaster.map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
-                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="flex-1 min-w-[100px] p-2 border-2 border-blue-200 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 outline-none">
-                                <option value="category">分野順で並び替え</option>
-                                <option value="tag">タグ順で並び替え</option>
-                                <option value="name">名前順で並び替え</option>
+                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="flex-1 min-w-[110px] p-2 border-2 border-blue-200 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 outline-none">
+                                <option value="category">分野順</option>
+                                <option value="tag">タグ順</option>
+                                <option value="vendor">業者順</option> 
+                                <option value="name">名前順</option>
                             </select>
                         </div>
                     </div>
 
-                    {/* アイテム一覧 (スマホ最適化) */}
+                    {/* アイテム一覧 */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-4">
+                        {displayedItems.length === 0 && (
+                            <div className="col-span-full text-center py-10 text-slate-400 font-bold text-sm">表示するアイテムがありません。</div>
+                        )}
                         {displayedItems.map(item => {
                             const isLowStock = item.currentStock <= item.orderThreshold;
                             return (
-                                <div key={item.id} className={`p-3 sm:p-4 rounded-xl border-2 flex flex-col justify-between ${isLowStock ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-100'}`}>
+                                <div key={item.id} className={`p-3 sm:p-4 rounded-xl border-2 flex flex-col justify-between ${isLowStock ? 'bg-red-50/50 border-red-200 shadow-sm' : 'bg-white border-slate-100'}`}>
                                     <div>
                                         <div className="flex flex-wrap items-center gap-1 mb-1.5">
                                             {isLowStock && <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded animate-pulse">要発注</span>}
@@ -330,16 +361,23 @@
                                             {item.name}
                                             <button onClick={() => openEditModal(item)} className="absolute right-0 top-0 text-slate-300 hover:text-blue-500 text-sm">✏️</button>
                                         </h3>
-                                        {item.barcode && <p className="text-[10px] text-slate-400 mt-0.5 font-mono break-all">🔢 {item.barcode}</p>}
+                                        
+                                        {(item.vendor || item.itemCode) && (
+                                            <div className="mt-2 text-[10px] text-slate-500 bg-slate-50 p-1.5 rounded border border-slate-100 flex items-center flex-wrap gap-1">
+                                                {item.vendor && <span className="font-bold text-slate-600">🏢 {item.vendor}</span>}
+                                                {item.itemCode && <span>(ｺｰﾄﾞ: {item.itemCode})</span>}
+                                            </div>
+                                        )}
+                                        {item.barcode && <p className="text-[10px] text-slate-400 mt-1 font-mono break-all">🔢 {item.barcode}</p>}
                                     </div>
                                     
-                                    <div className="flex items-center justify-between mt-3 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                    <div className="flex items-center justify-between mt-3 bg-white p-2 rounded-lg border border-slate-100 shadow-sm">
                                         <div className="text-center w-1/3">
                                             <p className="text-[10px] font-bold text-slate-400">現在庫</p>
                                             <p className={`text-xl sm:text-2xl font-black ${isLowStock ? 'text-red-600' : 'text-slate-700'}`}>{item.currentStock}<span className="text-xs ml-0.5 font-bold text-slate-400">{item.unit}</span></p>
                                         </div>
                                         <div className="flex gap-1 w-2/3 justify-end">
-                                            <button onClick={() => updateStock(item.id, -1, item.currentStock)} className="w-10 h-10 sm:w-12 sm:h-12 bg-white border-2 border-slate-200 rounded-xl text-xl font-black text-slate-600 hover:bg-slate-100 active:scale-95 transition flex items-center justify-center shadow-sm">－</button>
+                                            <button onClick={() => updateStock(item.id, -1, item.currentStock)} className="w-10 h-10 sm:w-12 sm:h-12 bg-slate-50 border-2 border-slate-200 rounded-xl text-xl font-black text-slate-600 hover:bg-slate-100 active:scale-95 transition flex items-center justify-center">－</button>
                                             <button onClick={() => updateStock(item.id, 1, item.currentStock)} className="w-10 h-10 sm:w-12 sm:h-12 bg-blue-500 border-2 border-blue-600 rounded-xl text-xl font-black text-white hover:bg-blue-600 active:scale-95 transition flex items-center justify-center shadow-sm">＋</button>
                                         </div>
                                     </div>
@@ -352,7 +390,6 @@
                         +
                     </button>
 
-                    {/* 登録・編集モーダル */}
                     {itemModal.isOpen && (
                         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 z-40 overflow-y-auto">
                             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-4 sm:p-6 relative my-4">
@@ -366,7 +403,6 @@
                                         <input value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full p-2.5 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500" required />
                                     </div>
 
-                                    {/* ★ バーコード読取エリア */}
                                     <div>
                                         <label className="text-xs font-bold text-slate-500 block mb-1">バーコード (JANコード)</label>
                                         <div className="flex gap-2">
@@ -397,6 +433,26 @@
                                     </div>
 
                                     <div className="p-3 border-2 border-slate-100 rounded-xl bg-slate-50">
+                                        <h4 className="text-xs font-bold text-slate-500 mb-2">🛒 発注情報 (任意)</h4>
+                                        <div className="flex flex-col sm:flex-row gap-2">
+                                            <div className="flex-1">
+                                                <label className="text-[10px] font-bold text-slate-500 block mb-1">業者名</label>
+                                                <div className="flex gap-1">
+                                                    <select value={formData.vendor} onChange={e => setFormData({...formData, vendor: e.target.value})} className="w-full p-2.5 border-2 border-slate-200 rounded-xl text-sm font-bold bg-white outline-none">
+                                                        <option value="">指定なし</option>
+                                                        {vendors.map(v => <option key={v} value={v}>{v}</option>)}
+                                                    </select>
+                                                    <button type="button" onClick={() => setShowVendorModal(true)} className="p-2 bg-slate-200 text-slate-600 rounded-xl font-bold">⚙️</button>
+                                                </div>
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="text-[10px] font-bold text-slate-500 block mb-1">注文番号・商品コード</label>
+                                                <input value={formData.itemCode} onChange={e => setFormData({...formData, itemCode: e.target.value})} className="w-full p-2.5 border-2 border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500" placeholder="例: 123-456" />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="p-3 border-2 border-slate-100 rounded-xl bg-white">
                                         <div className="flex justify-between items-center mb-2">
                                             <label className="text-xs font-bold text-slate-500">🏷️ タグ</label>
                                             <button type="button" onClick={() => setShowTagModal(true)} className="text-[10px] font-bold text-blue-600 bg-white px-2 py-1 rounded border border-blue-200">⚙️ 編集</button>
@@ -436,10 +492,10 @@
                         </div>
                     )}
 
-                    {/* マスター管理モーダル */}
                     {showCategoryModal && renderMasterModal("分野", categories, "categories", setShowCategoryModal)}
                     {showUnitModal && renderMasterModal("単位", units, "units", setShowUnitModal)}
                     {showTagModal && renderMasterModal("タグ", tagsMaster, "tags_master", setShowTagModal)}
+                    {showVendorModal && renderMasterModal("業者名", vendors, "vendors", setShowVendorModal)} 
 
                 </div>
             );
