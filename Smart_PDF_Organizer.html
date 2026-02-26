@@ -49,6 +49,7 @@
             const [pageNumConfig, setPageNumConfig] = useState({ start: 1, pos: 'center', y: 15, size: 12, font: 'Helvetica' });
             const [editingPageId, setEditingPageId] = useState(null);
             
+            // ★ ArrayBufferではなく、アップロードされた「Fileオブジェクトそのもの」を保持するように変更
             const fileCache = useRef(new Map());
             const gridRef = useRef(null);
             const sortableInstance = useRef(null);
@@ -83,11 +84,14 @@
 
                 for (const file of pdfFiles) {
                     try {
-                        const arrayBuffer = await file.arrayBuffer();
                         const fileId = `${file.name}-${Date.now()}`;
-                        fileCache.current.set(fileId, arrayBuffer);
+                        // ★ ファイル自体をキャッシュに保存
+                        fileCache.current.set(fileId, file);
 
-                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+                        // プレビュー用にArrayBufferを取得
+                        const arrayBuffer = await file.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                        
                         for (let i = 1; i <= pdf.numPages; i++) {
                             const page = await pdf.getPage(i);
                             const viewport = page.getViewport({ scale: 1.5 });
@@ -154,11 +158,15 @@
                     for (let i = 0; i < pages.length; i++) {
                         const pageData = pages[i];
                         let srcPdf = loadedPdfs.get(pageData.fileId);
+                        
                         if (!srcPdf) {
-                            const arrayBuffer = fileCache.current.get(pageData.fileId);
-                            if (!arrayBuffer) throw new Error("メモリからファイルデータが失われました。再度アップロードしてください。");
-                            const bufferCopy = arrayBuffer.slice(0);
-                            srcPdf = await PDFDocument.load(bufferCopy);
+                            // ★ キャッシュからFileオブジェクトを取り出す
+                            const file = fileCache.current.get(pageData.fileId);
+                            if (!file) throw new Error("メモリからファイルデータが失われました。再度アップロードしてください。");
+                            
+                            // ★ 毎回真新しいArrayBufferを取り出すことでDetachedエラーを完全に回避
+                            const freshArrayBuffer = await file.arrayBuffer();
+                            srcPdf = await PDFDocument.load(freshArrayBuffer);
                             loadedPdfs.set(pageData.fileId, srcPdf);
                         }
 
@@ -220,7 +228,10 @@
                     URL.revokeObjectURL(url);
 
                 } catch (error) {
-                    console.error(error); alert('PDFの生成中にエラーが発生しました。\n詳細: ' + error.message);
+                    console.error(error); 
+                    // ★ undefinedと表示されないように、エラーメッセージを安全に取得
+                    const errorMsg = error.message ? error.message : (typeof error === 'string' ? error : '不明なエラーが発生しました');
+                    alert('PDFの生成中にエラーが発生しました。\n詳細: ' + errorMsg);
                 }
                 setIsLoading(false);
             };
@@ -350,7 +361,6 @@
             const [mode, setMode] = useState('text');
             const [selectedId, setSelectedId] = useState(null);
             
-            // 入力前のデフォルト状態管理
             const [color, setColor] = useState('#ef4444');
             const [fontSize, setFontSize] = useState(24);
             const [fontFamily, setFontFamily] = useState('sans-serif');
@@ -363,7 +373,6 @@
             const signCanvasRef = useRef(null);
             const layerRef = useRef(null);
 
-            // 選択中の要素を取得
             const selectedAnn = annotations.find(a => a.id === selectedId);
 
             const handleFontSizeChange = (e) => {
@@ -383,7 +392,6 @@
                 if (selectedId) setAnnotations(annotations.map(a => a.id === selectedId ? { ...a, color: c } : a));
             };
 
-            // 画像サイズ変更ハンドラ
             const handleImageSizeChange = (e) => {
                 const newWidth = Number(e.target.value);
                 if (selectedId) {
