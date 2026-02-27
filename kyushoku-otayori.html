@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta name="robots" content="noindex, nofollow">    <meta charset="UTF-8">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>給食おたよりメーカー Pro</title>
@@ -251,7 +250,7 @@
         return `${d.getMonth() + 1}月${d.getDate()}日（${days[d.getDay()]}）`;
       };
 
-      const fullHtml = `　こんにちは。<ruby>給食<rt>きゅうしょく</rt></ruby>の<ruby>時間<rt>じかん</rt></ruby>になりました。<br /><br />　みなさん、<ruby>食器<rt>しょっき</rt></ruby>やはしの<ruby>向<rt>む</rt></ruby>きは、あっていますか？ <ruby>今日<rt>きょう</rt></ruby>のメニューは、 ${rubyMenu || menu || "（献立名）"} です。<br /><br />　${rubyMemo || (memo ? memo.replace(/\n/g, '<br />　') : "（ここにAIが作成した本文が入ります）")}`;
+      const fullHtml = `　給食の時間になりました。<br /><br />　みなさん、食器やはしの向きは、あっていますか？ 食べものや、つくってくれた人たちに感謝の気持ちをこめて、食事のあいさつをしましょう。<br /><br />　今日のメニューは、 ${rubyMenu || menu || "（献立名）"} です。<br /><br />　${rubyMemo || (memo ? memo.replace(/\n/g, '<br />　') : "（ここにAIが作成した本文が入ります）")}`;
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -326,6 +325,32 @@
             </section>
           </main>
 
+          {/* AIローディングポップアップ */}
+          {isLoading && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-3xl p-8 shadow-2xl flex flex-col items-center gap-4" style={{ minWidth: "260px" }}>
+                <div style={{ fontSize: "56px", animation: "popbounce 0.8s infinite alternate" }}>🍱</div>
+                <div className="flex gap-2">
+                  {[0,1,2].map(i => (
+                    <div key={i} style={{
+                      width: "10px", height: "10px", borderRadius: "50%",
+                      backgroundColor: "#f97316",
+                      animation: `popbounce 0.6s ${i * 0.2}s infinite alternate`
+                    }} />
+                  ))}
+                </div>
+                <p className="text-orange-500 font-bold text-sm">AIが考え中です…</p>
+                <p className="text-gray-400 text-xs">おいしいメモを作っています 🌟</p>
+              </div>
+              <style>{`
+                @keyframes popbounce {
+                  from { transform: translateY(0px); }
+                  to { transform: translateY(-12px); }
+                }
+              `}</style>
+            </div>
+          )}
+
           {/* モーダル類 */}
           {showOptionsModal && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
@@ -365,7 +390,11 @@
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
               <div className="bg-white p-6 rounded-xl w-80 shadow-2xl">
                 <h3 className="font-bold mb-4">API設定</h3>
-                <input type="password" placeholder="Gemini API Key" value={apiKey} onChange={(e) => {setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value);}} className="w-full p-2 border rounded mb-4 text-sm" />
+                <label className="text-xs font-bold text-gray-600">Gemini API Key</label>
+                <input type="password" placeholder="APIキーを入力" value={apiKey} onChange={(e) => {setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value);}} className="w-full p-2 border rounded mb-3 text-sm" />
+                <label className="text-xs font-bold text-gray-600">モデル名</label>
+                <input type="text" placeholder="例: gemini-1.5-flash" value={modelName} onChange={(e) => {setModelName(e.target.value); localStorage.setItem('gemini_model_name', e.target.value);}} className="w-full p-2 border rounded mb-4 text-sm" />
+                <p className="text-[10px] text-gray-400 mb-4">例: gemini-1.5-flash / gemini-1.5-pro / gemini-2.0-flash</p>
                 <button onClick={() => setShowSettings(false)} className="w-full py-2 bg-orange-600 text-white rounded font-bold">閉じる</button>
               </div>
             </div>
