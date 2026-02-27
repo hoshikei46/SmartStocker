@@ -101,7 +101,12 @@
       const [showTemplateSettings, setShowTemplateSettings] = useState(false);
       const [templates, setTemplates] = useState(defaultTemplates);
       
-      const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+      const getTodayJST = () => {
+        const now = new Date();
+        const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+        return jst.toISOString().split('T')[0];
+      };
+      const [date, setDate] = useState(getTodayJST());
       const [menu, setMenu] = useState('');
       const [theme, setTheme] = useState('');
       const [memo, setMemo] = useState('');
