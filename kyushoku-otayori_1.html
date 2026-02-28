@@ -95,8 +95,8 @@
     };
 
     function App() {
-      const [apiKey, setApiKey] = useState('');
-      const [modelName, setModelName] = useState('gemini-1.5-flash');
+      const [apiKey, setApiKey] = useState('AIzaSyBAnmwDZIxbVMwC15SY8b7hD3waxT2Aa2Q');
+      const [modelName, setModelName] = useState('gemini-2.5-flash');
       const [showSettings, setShowSettings] = useState(false);
       const [showTemplateSettings, setShowTemplateSettings] = useState(false);
       const [templates, setTemplates] = useState(defaultTemplates);
@@ -127,11 +127,7 @@
       }, []);
 
       useEffect(() => {
-        const storedKey = localStorage.getItem('gemini_api_key');
-        const storedModel = localStorage.getItem('gemini_model_name');
         const storedTemplates = localStorage.getItem('kyushoku_templates');
-        if (storedKey) setApiKey(storedKey);
-        if (storedModel) setModelName(storedModel);
         if (storedTemplates) setTemplates(JSON.parse(storedTemplates));
       }, []);
 
@@ -284,7 +280,7 @@
               <button onClick={exportToCSV} className="bg-orange-700 px-2 py-1 rounded text-xs">📥 保存Excel</button>
               <label className="bg-orange-700 px-2 py-1 rounded text-xs cursor-pointer">📤 読込Excel<input type="file" accept=".csv" onChange={importFromCSV} className="hidden" /></label>
               <button onClick={() => setShowTemplateSettings(true)} className="bg-orange-700 px-2 py-1 rounded text-xs">📝 定型文</button>
-              <button onClick={() => setShowSettings(true)} className="bg-orange-700 px-2 py-1 rounded text-xs">⚙️ 設定</button>
+
             </div>
           </header>
 
@@ -445,19 +441,7 @@
             </div>
           )}
 
-          {showSettings && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-              <div className="bg-white p-6 rounded-xl w-80 shadow-2xl">
-                <h3 className="font-bold mb-4">API設定</h3>
-                <label className="text-xs font-bold text-gray-600">Gemini API Key</label>
-                <input type="password" placeholder="APIキーを入力" value={apiKey} onChange={(e) => {setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value);}} className="w-full p-2 border rounded mb-3 text-sm" />
-                <label className="text-xs font-bold text-gray-600">モデル名</label>
-                <input type="text" placeholder="例: gemini-1.5-flash" value={modelName} onChange={(e) => {setModelName(e.target.value); localStorage.setItem('gemini_model_name', e.target.value);}} className="w-full p-2 border rounded mb-4 text-sm" />
-                <p className="text-[10px] text-gray-400 mb-4">例: gemini-1.5-flash / gemini-1.5-pro / gemini-2.0-flash</p>
-                <button onClick={() => setShowSettings(false)} className="w-full py-2 bg-orange-600 text-white rounded font-bold">閉じる</button>
-              </div>
-            </div>
-          )}
+
         </div>
       );
     }
