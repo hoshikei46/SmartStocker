@@ -256,7 +256,7 @@
         return `${d.getMonth() + 1}月${d.getDate()}日（${days[d.getDay()]}）`;
       };
 
-      const fullHtml = `　給食の時間になりました。<br /><br />　みなさん、食器やはしの向きは、あっていますか？ 食べものや、つくってくれた人たちに感謝の気持ちをこめて、食事のあいさつをしましょう。<br /><br />　今日のメニューは、 ${rubyMenu || menu || "（献立名）"} です。<br /><br />　${rubyMemo || (memo ? memo.replace(/\n/g, '<br />　') : "（ここにAIが作成した本文が入ります）")}`;
+      const fullHtml = `　<ruby>給食<rt>きゅうしょく</rt></ruby>の<ruby>時間<rt>じかん</rt></ruby>になりました。<br /><br />　みなさん、<ruby>食器<rt>しょっき</rt></ruby>やはしの<ruby>向<rt>む</rt></ruby>きは、あっていますか？ <ruby>食<rt>た</rt></ruby>べものや、つくってくれた<ruby>人<rt>ひと</rt></ruby>たちに<ruby>感謝<rt>かんしゃ</rt></ruby>の<ruby>気持<rt>きも</rt></ruby>ちをこめて、<ruby>食事<rt>しょくじ</rt></ruby>のあいさつをしましょう。<br /><br />　<ruby>今日<rt>きょう</rt></ruby>のメニューは、 ${rubyMenu || menu || "（献立名）"} です。<br /><br />　${rubyMemo || (memo ? memo.replace(/\n/g, '<br />　') : "（ここにAIが作成した本文が入ります）")}`;
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
