@@ -255,12 +255,18 @@
         const applicant = applicantRaw.replace(/\(.*?\)/g, '').replace(/（.*?）/g, '').trim();
         // 種類: 括弧前を取得
         const leaveType = (cols[3] || "").split('（')[0].split('(')[0].trim();
-        // 取得期間: 日付部分のみ抽出
-        const periodRaw = cols[4] || "";
+        // 取得期間: 日付が2つ以上あれば範囲表示、1つなら日付＋時刻をそのまま残す
+        const periodRaw = (cols[4] || "").trim().replace(/\s*（休憩時間[：:][^）]*）/g, "");
         const dates = periodRaw.match(/\d{4}\/\d{1,2}\/\d{1,2}/g) || [];
-        const leavePeriod = dates.length > 1
-          ? dates[0] + ' 〜 ' + dates[dates.length - 1]
-          : (dates[0] || periodRaw.split('\t')[0].trim());
+        let leavePeriod;
+        if (dates.length > 1) {
+          // 範囲（例: 2025/8/14 〜 2025/8/15）
+          leavePeriod = dates[0] + ' 〜 ' + dates[dates.length - 1];
+        } else {
+          // 1日申請: 日付以降の時刻情報（全角スペース・半角スペース含む）をそのまま保持
+          // 例: "2025/12/18　13:45～16:45" → そのまま
+          leavePeriod = periodRaw || (dates[0] || "");
+        }
         // 日数: cols[6]
         const leaveDays = (cols[6] || "").trim();
         return { applicant, leaveType, leavePeriod, leaveDays };
@@ -439,9 +445,12 @@
       } else {
         const todayStr = toDateStr(new Date());
         tableBody.innerHTML = filteredData.map((row, index, arr) => {
-          const isNameChanged = index > 0 && row.applicant !== arr[index - 1].applicant;
-          const borderClass = isNameChanged 
-            ? "border-t-[3px] border-emerald-300 print:border-t-[3px] print:border-black" 
+          // 直近表示モード：日付が変わる行に太線 / 通常モード：申請者が変わる行に太線
+          const isSeparator = quickRangeMode
+            ? index > 0 && toDateStr(getStartDate(row.leavePeriod)) !== toDateStr(getStartDate(arr[index - 1].leavePeriod))
+            : index > 0 && row.applicant !== arr[index - 1].applicant;
+          const borderClass = isSeparator
+            ? "border-t-[3px] border-emerald-300 print:border-t-[3px] print:border-black"
             : "border-t border-gray-100 print:border-gray-300";
 
           // 今日の行かどうか判定
