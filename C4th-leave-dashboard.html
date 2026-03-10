@@ -880,25 +880,151 @@
     e.target.value = '';
   });
 
+  // =============================================
+  // Excel出力ユーティリティ
+  // =============================================
+
+  // leavePeriod から日付部分（Date オブジェクト）を返す
+  function extractDateForExcel(periodStr) {
+    if (!periodStr) return null;
+    const m = periodStr.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+    if (!m) return null;
+    return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]));
+  }
+
+  // leavePeriod から時間帯文字列を返す（日付・空白を除いた残り）
+  function extractTimeStr(periodStr) {
+    if (!periodStr) return '';
+    // 日付パターン（YYYY/MM/DD〜YYYY/MM/DD や YYYY/MM/DD 単体）を除去
+    let s = periodStr
+      .replace(/\d{4}\/\d{1,2}\/\d{1,2}\s*〜\s*\d{4}\/\d{1,2}\/\d{1,2}/g, '')
+      .replace(/\d{4}\/\d{1,2}\/\d{1,2}/g, '')
+      .trim();
+    // 先頭の区切り文字を除去
+    s = s.replace(/^[\s〜～\-\/]+/, '').replace(/[\s〜～\-\/]+$/, '').trim();
+    return s;
+  }
+
   // Excel出力
   document.getElementById('exportBtn').addEventListener('click', () => {
     if (filteredData.length === 0) { alert('出力するデータがありません。'); return; }
+
+    // ① 連続休暇の展開をどうするか確認
+    const hasRange = filteredData.some(d => isRangeRow(d));
+    let exportBase;
+    if (hasRange) {
+      const doExpand = confirm(
+        '連続した休暇等が含まれています。\n\n' +
+        '【OK】　→ 1日ずつ展開して出力する\n' +
+        '【キャンセル】→ 展開せずそのまま出力する'
+      );
+      if (doExpand) {
+        exportBase = [];
+        filteredData.forEach(row => exportBase.push(...expandRow(row)));
+      } else {
+        exportBase = [...filteredData];
+      }
+    } else {
+      exportBase = [...filteredData];
+    }
+
     const visibleCols = colOrder.filter(id => colVisible[id]);
-    const labelMap = Object.fromEntries(COL_DEFS.map(c => [c.id, c.label]));
-    const fieldMap = {
-      applicant: d => d.applicant,
-      leaveType: d => d.leaveType,
-      period:    d => d.leavePeriod,
-      days:      d => d.leaveDays,
-      remark:    d => d.remark || '',
-      status:    d => d.status,
-    };
-    const exportData = filteredData.map(d => {
-      const obj = {};
-      visibleCols.forEach(id => { obj[labelMap[id]] = fieldMap[id](d); });
-      return obj;
+    const hasPeriodCol = visibleCols.includes('period');
+
+    // ② ヘッダー行を構築（period列を2列に分割）
+    const headers = [];
+    visibleCols.forEach(id => {
+      if (id === 'period') {
+        headers.push('取得期間（日付）');
+        headers.push('取得期間（時間帯）');
+      } else {
+        const def = COL_DEFS.find(c => c.id === id);
+        headers.push(def ? def.label : id);
+      }
     });
-    const ws = XLSX.utils.json_to_sheet(exportData);
+
+    // ③ データ行を構築
+    const aoa = [headers]; // array of arrays
+    exportBase.forEach(d => {
+      const row = [];
+      visibleCols.forEach(id => {
+        if (id === 'period') {
+          const dateVal = extractDateForExcel(d.leavePeriod);
+          row.push(dateVal !== null ? dateVal : '');
+          row.push(extractTimeStr(d.leavePeriod));
+        } else if (id === 'applicant') { row.push(d.applicant);
+        } else if (id === 'leaveType') { row.push(d.leaveType);
+        } else if (id === 'days')      { row.push(d.leaveDays);
+        } else if (id === 'remark')    { row.push(d.remark || '');
+        } else if (id === 'status')    { row.push(d.status);
+        } else { row.push(''); }
+      });
+      aoa.push(row);
+    });
+
+    // ④ シート生成
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // ⑤ 日付列にフォーマット適用
+    if (hasPeriodCol) {
+      const periodDateColIdx = (() => {
+        let ci = 0;
+        for (const id of visibleCols) {
+          if (id === 'period') return ci;
+          ci += 1;
+        }
+        return -1;
+      })();
+
+      if (periodDateColIdx >= 0) {
+        const colLetter = XLSX.utils.encode_col(periodDateColIdx);
+        const rowCount = aoa.length;
+        for (let r = 1; r < rowCount; r++) { // r=0はヘッダー行
+          const cellAddr = colLetter + (r + 1);
+          const cell = ws[cellAddr];
+          if (cell && cell.v instanceof Date) {
+            // Excel日付シリアル値に変換
+            cell.t = 'n';
+            const d = cell.v;
+            const excelSerial = 25569 + (d.getTime() - d.getTimezoneOffset() * 60000) / 86400000;
+            cell.v = excelSerial;
+            cell.z = 'yyyy/m/d'; // 日付書式
+          }
+        }
+      }
+    }
+
+    // ⑥ 列幅を自動調整（各列の最大文字数をもとに設定）
+    const colCount = headers.length;
+    const colWidths = headers.map(h => {
+      // 全角文字は2、半角は1としてカウントする関数
+      const charWidth = str => {
+        if (!str) return 0;
+        let w = 0;
+        for (const ch of String(str)) {
+          w += /[\u3000-\u9FFF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6]/.test(ch) ? 2 : 1;
+        }
+        return w;
+      };
+      // ヘッダー幅
+      let max = charWidth(h);
+      // データ行の最大幅
+      for (let r = 1; r < aoa.length; r++) {
+        const colIndex = headers.indexOf(h);
+        const val = aoa[r][colIndex];
+        // 日付セルは "yyyy/m/d" 形式 10文字相当
+        const w = (val instanceof Date) ? 10 : charWidth(val);
+        if (w > max) max = w;
+      }
+      // 最小8・最大60（単位: 半角文字数）、少しゆとりを足す
+      return { wch: Math.min(60, Math.max(8, max + 2)) };
+    });
+    ws['!cols'] = colWidths;
+
+    // ⑦ 1行目にオートフィルター設定
+    const lastColLetter = XLSX.utils.encode_col(colCount - 1);
+    ws['!autofilter'] = { ref: `A1:${lastColLetter}1` };
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '休暇取得状況');
     XLSX.writeFile(wb, `休暇取得状況_${new Date().toISOString().split('T')[0]}.xlsx`);
